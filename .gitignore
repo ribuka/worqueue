@@ -20,3 +20,6 @@ wheels/
 
 # tmp
 /tmp/
+
+# task data (lives in the main checkout, not tracked)
+/data/
