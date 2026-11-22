@@ -15,6 +15,9 @@
 - NEVER edit, create, or delete tracked files on the local `main` branch unless the user explicitly asks for that edit on `main`.
   - Investigation-only requests are read-only: no file edits at all, except scratch files under `tmp/<task-name>/`.
   - If a code or doc change seems necessary, propose it and wait for instructions, or create a branch or worktree first.
+- `data/` holds the user's real task data. It is its own git repository, not tracked by this one, and in a worktree it is a junction to the main checkout's `data/` (made by `.githooks/post-checkout`; see "データの置き場所" in `docs/spec.md`).
+  - NEVER write to `data/` from tests or experiments. Pass a temporary directory instead.
+  - NEVER delete a worktree's `data` link with a recursive delete; it can reach the main checkout's data. Remove the link itself, or use `git worktree remove`.
 
 ## Python
 
