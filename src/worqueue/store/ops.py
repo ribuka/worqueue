@@ -13,7 +13,7 @@ from worqueue.store.queue import read_queue, write_queue
 from worqueue.store.repo import check_git, commit, ensure_repo
 from worqueue.store.task import (
     KINDS,
-    STATUSES,
+    OPEN_STATUSES,
     Task,
     append_history,
     history_line,
@@ -86,7 +86,7 @@ def add_task(
     assignee = _one_line("担当", new.assignee)
     if new.kind not in KINDS:
         raise WorqueueError(f"種別は {', '.join(KINDS)} のどれかにしてください: {new.kind}")
-    if new.status not in STATUSES or new.status == "done":
+    if new.status not in OPEN_STATUSES:
         raise WorqueueError(f"作るタスクの状態は todo, doing, waiting のどれかにしてください: {new.status}")
     def prepare() -> tuple[tuple[Task, int], _Change]:
         depends_on = tuple(dict.fromkeys(new.depends_on))

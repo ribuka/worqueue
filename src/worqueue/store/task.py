@@ -11,6 +11,7 @@ from worqueue.store.errors import WorqueueError
 
 TASKS_DIR = "tasks"
 STATUSES = ("todo", "doing", "waiting", "done")
+OPEN_STATUSES = ("todo", "doing", "waiting")
 KINDS = ("manage", "implement")
 HISTORY_HEADING = "## 履歴"
 FIELD_NAMES = ("title", "status", "kind", "assignee", "due", "depends_on", "created")
