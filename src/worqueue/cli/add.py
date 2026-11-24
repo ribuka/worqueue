@@ -2,8 +2,9 @@
 
 import argparse
 import re
-from datetime import date, datetime
+from datetime import date
 
+from worqueue.cli import clock
 from worqueue.cli.output import add_json_option, print_json
 from worqueue.store.ops import NewTask, add_task
 from worqueue.store.paths import data_dir
@@ -52,7 +53,7 @@ def run(args: argparse.Namespace) -> None:
         status=args.status,
         body=args.body,
     )
-    task, position = add_task(data_dir(), new, now=datetime.now().astimezone())
+    task, position = add_task(data_dir(), new, now=clock.now())
     if args.json:
         print_json({"task": task.summary(position)})
     else:

@@ -53,13 +53,14 @@ class Task:
     created: str
     markdown: str
 
-    def summary(self, position: int) -> dict[str, object]:
+    def summary(self, position: int | None) -> dict[str, object]:
         """Return the task's JSON object for the CLI, without the body and history.
 
         Parameters
         ----------
-        position : int
-            1-based position among the tasks shown.
+        position : int or None
+            1-based position among the tasks ``wq list`` shows, or None for a task
+            it does not show (``done``, or not in the queue).
 
         Returns
         -------
@@ -151,6 +152,34 @@ def history_line(at: datetime, content: str) -> str:
         ``- <YYYY-MM-DD HH:MM> <content>``.
     """
     return f"- {at.astimezone().strftime('%Y-%m-%d %H:%M')} {content}"
+
+
+def append_history(markdown: str, line: str) -> str:
+    """Return ``markdown`` with one history entry added at its end.
+
+    Parameters
+    ----------
+    markdown : str
+        The Markdown after the front matter (body and history).
+    line : str
+        The entry, from ``history_line``.
+
+    Returns
+    -------
+    str
+        With a line that is just the history heading, the entry follows the last
+        line (after a blank line when that line is the heading). Without one, a
+        history heading and the entry are added after the Markdown.
+    """
+    stripped = markdown.rstrip("\n")
+    lines = stripped.split("\n")
+    if HISTORY_HEADING in lines:
+        last = next(text for text in reversed(lines) if text.strip())
+        separator = "\n\n" if last == HISTORY_HEADING else "\n"
+        return f"{stripped}{separator}{line}\n"
+    if not stripped:
+        return f"\n{HISTORY_HEADING}\n\n{line}\n"
+    return f"{stripped}\n\n{HISTORY_HEADING}\n\n{line}\n"
 
 
 def write_task(data: Path, task: Task) -> Path:

@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from worqueue.cli import add, listing
+from worqueue.cli import add, done, listing, log, move, show
 from worqueue.cli.output import print_error
 from worqueue.store.errors import WorqueueError
 
@@ -23,6 +23,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(title="コマンド", metavar="<command>")
     add.register(subparsers)
     listing.register(subparsers)
+    show.register(subparsers)
+    move.register(subparsers)
+    log.register(subparsers)
+    done.register(subparsers)
     return parser
 
 
