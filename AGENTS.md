@@ -9,6 +9,7 @@
   - NEVER add or keep compatibility layers, deprecated aliases, or re-exports for old import paths.
   - Exception: once the CLI's JSON output is decided in `docs/spec.md`, agents rely on it. Change it only together with `docs/spec.md`.
 - Coding rules for every language (keeping the code easy to change): [.agents/docs/coding.md](.agents/docs/coding.md)
+- Choose the package for new code from "パッケージ構成" in `docs/spec.md`. `store` must not import `cli`; `tests/test_layers.py` checks this direction.
 
 ## Working tree
 
