@@ -30,6 +30,7 @@
 ### Verification commands
 
 - Run lint: `uv run -m ruff check .`
+- Run type check: `uv run -m ty check`
 - Run tests: `uv run -m pytest --tb=short -q`
 
 ## Github

@@ -494,14 +494,17 @@ CLI（エージェント）と Web UI とエディタが、同じファイルを
 
 ## CI（2026-11-25 決定）
 
-GitHub Actions のワークフロー `.github/workflows/ci.yml`（ワークフロー名 `CI`、ジョブ名 `test`）で lint とテストを走らせ、結果を PR のチェックとして見せる。
+GitHub Actions のワークフロー `.github/workflows/ci.yml`（ワークフロー名 `CI`、ジョブ名 `test`）で lint と型検査とテストを走らせ、結果を PR のチェックとして見せる。
 
 - 契機：すべての `pull_request` と、`main` への `push` だけ。PR ごとの確認と、マージ後の `main` の確認の両方が要るため。他のブランチへの push だけでは走らせない。
 - 同じ PR（`main` では同じブランチ）の古い実行は `concurrency`（`group: ci-${{ github.event.pull_request.number || github.ref }}`、`cancel-in-progress: true`）で取り消す。レビューの修正で続けて push しても、最後の head の結果だけを待てばよいため。
 - `runs-on: windows-latest` だけで走らせる。ユーザーは Windows で使い、テストは Windows のファイルロックと git for Windows の動きを前提にしているため。ubuntu でだけ壊れる変更は見落とすが、ユーザーの使い方では問題にならないので受け入れる。
-- 手順：`actions/checkout` → `astral-sh/setup-uv`（`enable-cache: true`）→ `uv sync --locked` → `uv run -m ruff check .` → `uv run -m pytest --tb=short -q`。`timeout-minutes: 15`、`permissions: contents: read`。
+- 手順：`actions/checkout` → `astral-sh/setup-uv`（`enable-cache: true`）→ `uv sync --locked` → `uv run -m ruff check .` → `uv run -m ty check` → `uv run -m pytest --tb=short -q`。`timeout-minutes: 15`、`permissions: contents: read`。
   - Python は `uv sync --locked` に任せ、`.python-version` の 3.13 を uv が入れる（`actions/setup-python` は使わない）。`--locked` なので、`uv.lock` が `pyproject.toml` と合っていなければ失敗する。
   - git の設定（`user.name` など）は足さない。テストは `tests/conftest.py` の autouse の fixture で、`WORQUEUE_DATA` を一時ディレクトリにし、git をユーザーの設定から切り離し、コミットする人を環境変数で渡すため。`data/` はチェックアウトに無く、`.githooks` も有効にしない。
+- 型検査は ty（`uv run -m ty check`。2026-11-25 決定）。設定は足さず、既定（`src/` と `tests/` のすべて、`pyproject.toml` の `requires-python`）で検査する。
+  - 理由：型ヒントはすべての関数に付ける決まり（`.agents/docs/python.md`）なので、その誤りを PR ごとに見つける。ruff と同じ Astral の道具で、`uv run -m` でそろえて走らせられる。
+  - ty の版は dev の依存で固定する（`ty==<版>`、`uv.lock` に入る）。ty はまだ 0.0.x のベータで、版が上がるたびに新しい検査が増えて CI が落ちうるため。版は、指摘を直す手間と一緒に、手で上げる。uv の版を固定しないのと違うのは、uv の更新ではこのリポジトリのコードへの指摘が増えないため。
 - uv の版は指定しない（setup-uv の既定の最新版）。`uv.lock` が版をまたいで読めるうちは、版を上げる手間が要らないため。uv の更新で CI が壊れることがありうるが、まれなので受け入れ、起きたらそのときに版を固定する。
 - アクションの版は、実装した時点の最新版のタグで指定する（コミットの SHA では固定しない。自分専用のリポジトリでは、そこまでの供給網の脅威は小さいため）。
   - `actions/checkout` はメジャー版のタグ `@v7`。

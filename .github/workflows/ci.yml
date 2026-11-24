@@ -23,4 +23,5 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - run: uv run -m ruff check .
+      - run: uv run -m ty check
       - run: uv run -m pytest --tb=short -q
