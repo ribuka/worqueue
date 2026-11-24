@@ -227,7 +227,8 @@ def _parse_task(task_id: int, text: str) -> Task:
     front_matter, markdown = _split_front_matter(text)
     try:
         fields = yaml.safe_load(front_matter)
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, ValueError) as e:
+        # Building a date or time that does not exist (due: 2026-11-31) raises ValueError.
         raise _InvalidTaskError(f"front matter の YAML を読めません: {e}") from None
     if not isinstance(fields, dict):
         raise _InvalidTaskError("front matter がキーと値の組ではありません")

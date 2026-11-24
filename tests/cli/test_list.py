@@ -84,9 +84,15 @@ def test_list_without_data_is_empty_and_creates_nothing(wq: Callable, data: Path
     assert not data.exists()
 
 
-def test_list_reports_a_broken_task_file(wq: Callable, three_tasks: None, data: Path) -> None:
-    """``wq list`` reports a broken task file."""
-    (data / "tasks" / "3.md").write_text("壊れた\n", encoding="utf-8")
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [("---\ntitle:", "title:"), ("due: 2026-11-27", "due: 2026-11-31")],
+    ids=["no-front-matter", "impossible-date"],
+)
+def test_list_reports_a_broken_task_file(wq: Callable, three_tasks: None, data: Path, old: str, new: str) -> None:
+    """``wq list`` reports a broken task file as a JSON error naming the file."""
+    path = data / "tasks" / "3.md"
+    path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
 
     result = wq("list", "--json")
 

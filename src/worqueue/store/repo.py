@@ -1,6 +1,8 @@
 """The git repository of data/: checking git, creating the repository, and committing."""
 
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from worqueue.store.atomic import write_text_atomic
@@ -13,24 +15,31 @@ GITIGNORE_FILE = ".gitignore"
 def check_git(data: Path) -> None:
     """Check that git can run and knows who commits, before anything is written.
 
+    The identity is checked with the settings the commit will use: those of the
+    data/ repository when it exists; otherwise only the global and system settings,
+    since a repository created by ``ensure_repo`` does not inherit the local
+    settings of a repository around data/.
+
     Parameters
     ----------
     data : Path
-        The data/ directory. Used as the working directory when it exists.
+        The data/ directory.
 
     Raises
     ------
     WorqueueError
         If git is missing or the committer identity is not set.
     """
-    cwd = data if data.is_dir() else None
     try:
-        version = _run(["git", "--version"], cwd)
+        version = _run(["git", "--version"], None)
     except FileNotFoundError:
         raise WorqueueError("git が見つかりません。git をインストールしてください") from None
     if version.returncode != 0:
         raise WorqueueError(f"git を実行できません: {version.stderr.strip()}")
-    ident = _run(["git", "var", "GIT_COMMITTER_IDENT"], cwd)
+    if (data / ".git").exists():
+        ident = _run(["git", "-C", str(data), "var", "GIT_COMMITTER_IDENT"], None)
+    else:
+        ident = _committer_ident_outside_repositories()
     if ident.returncode != 0:
         raise WorqueueError(
             "git のコミットする人が決まっていません（git config user.name と user.email を設定してください）: "
@@ -96,6 +105,21 @@ def commit(data: Path, paths: list[Path], message: str) -> None:
             )
 
 
-def _run(args: list[str], cwd: Path | None) -> subprocess.CompletedProcess[str]:
+def _committer_ident_outside_repositories() -> subprocess.CompletedProcess[str]:
+    """Run ``git var GIT_COMMITTER_IDENT`` where no repository's local settings apply.
+
+    It runs in an empty temporary directory with ``GIT_CEILING_DIRECTORIES`` at its
+    parent, so git finds no repository even if the temporary directory is inside one.
+    """
+    with tempfile.TemporaryDirectory() as empty:
+        env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(Path(empty).parent)}
+        return _run(["git", "var", "GIT_COMMITTER_IDENT"], Path(empty), env)
+
+
+def _run(
+    args: list[str], cwd: Path | None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run a git command and capture its output as UTF-8."""
-    return subprocess.run(args, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace", check=False)
+    return subprocess.run(
+        args, cwd=cwd, env=env, capture_output=True, encoding="utf-8", errors="replace", check=False
+    )

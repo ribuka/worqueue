@@ -111,6 +111,7 @@ def test_read_task_rejects_a_broken_front_matter(data: Path, text: str, message:
         ("depends_on: [38]", "depends_on: [a]", "depends_on"),
         ("depends_on: [38]", "depends_on: 38", "depends_on"),
         ("due: 2026-11-27", "due: tomorrow", "due"),
+        ("due: 2026-11-27", "due: 2026-11-31", "YAML"),
         ("title: API の設計をレビューする", "title: ''", "title"),
         ("created: '2026-11-24T09:10:00+09:00'", "created: '2026-11-24T09:10:00'", "created"),
         ("assignee: me", "assignee: me\nowner: me", "未知のキー"),

@@ -142,19 +142,62 @@ def test_add_task_rejects_bad_fields_without_writing(
     assert not data.exists()
 
 
-def test_add_task_stops_before_writing_when_git_has_no_committer(
-    data: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, now: datetime
-) -> None:
-    """``add_task`` stops before writing when git has no committer."""
+@pytest.fixture
+def no_global_committer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leave git without a committer unless a repository's local settings give one."""
     (tmp_path / "gitconfig").write_text("[user]\n\tuseConfigOnly = true\n", encoding="utf-8")
     for role in ("AUTHOR", "COMMITTER"):
         monkeypatch.delenv(f"GIT_{role}_NAME")
         monkeypatch.delenv(f"GIT_{role}_EMAIL")
 
+
+def set_local_committer(git: Git, repo: Path) -> None:
+    """Set the committer in a repository's local settings."""
+    git(repo, "config", "user.name", "Local")
+    git(repo, "config", "user.email", "local@example.com")
+
+
+def test_add_task_stops_before_writing_when_git_has_no_committer(
+    data: Path, now: datetime, no_global_committer: None
+) -> None:
+    """``add_task`` stops before writing when git has no committer."""
     with pytest.raises(WorqueueError, match="コミットする人"):
         add(data, now)
 
     assert not data.exists()
+
+
+@pytest.mark.parametrize("data_exists", [False, True])
+def test_add_task_ignores_the_committer_of_a_repository_around_a_new_data(
+    tmp_path: Path, now: datetime, git: Git, no_global_committer: None, data_exists: bool
+) -> None:
+    """``add_task`` ignores the committer of a repository around a new data/, which it would not inherit."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    git(outer, "init", "-q", "-b", "main")
+    set_local_committer(git, outer)
+    data = outer / "data"
+    if data_exists:
+        data.mkdir()
+
+    with pytest.raises(WorqueueError, match="コミットする人"):
+        add(data, now)
+
+    assert not (data / "tasks").exists()
+    assert not (data / ".git").exists()
+
+
+def test_add_task_uses_the_committer_of_the_data_repository(
+    data: Path, now: datetime, git: Git, no_global_committer: None
+) -> None:
+    """``add_task`` uses the committer set in the data/ repository's local settings."""
+    data.mkdir()
+    git(data, "init", "-q", "-b", "main")
+    set_local_committer(git, data)
+
+    add(data, now)
+
+    assert git(data, "log", "--format=%cn") == "Local\n"
 
 
 def test_add_task_stops_before_writing_without_git(
