@@ -2,11 +2,11 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import datetime
 
 import pytest
 
-from worqueue.cli import add as add_command
+from worqueue.cli import clock
 from worqueue.cli.app import run
 
 
@@ -32,14 +32,7 @@ class Result:
 @pytest.fixture
 def wq(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, now: datetime) -> Callable[..., Result]:
     """Return a function that runs ``wq`` with the given arguments, with the clock fixed at ``now``."""
-    fixed = now
-
-    class FixedDatetime(datetime):
-        @classmethod
-        def now(cls, tz: tzinfo | None = None) -> datetime:
-            return fixed.astimezone(tz) if tz else fixed
-
-    monkeypatch.setattr(add_command, "datetime", FixedDatetime)
+    monkeypatch.setattr(clock, "now", lambda: now)
 
     def call(*argv: str) -> Result:
         capsys.readouterr()
