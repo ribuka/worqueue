@@ -1,6 +1,6 @@
 """The write lock on data/ that makes writers take turns."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -13,7 +13,7 @@ LOCK_TIMEOUT_SECONDS = 10.0
 
 
 @contextmanager
-def write_lock(data: Path, timeout: float = LOCK_TIMEOUT_SECONDS) -> Iterator[None]:
+def write_lock(data: Path, timeout: float = LOCK_TIMEOUT_SECONDS) -> Generator[None]:
     """Hold the write lock on data/ for the duration of the ``with`` block.
 
     The lock is an OS file lock, so it is released when the process ends, even by a crash.

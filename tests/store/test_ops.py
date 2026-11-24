@@ -29,7 +29,7 @@ Git = Callable[..., str]
 
 def add(data: Path, now: datetime, title: str = "タスク", **fields: object) -> int:
     """Create a task with ``add_task`` and return its ID."""
-    task, _ = add_task(data, NewTask(title=title, kind=fields.pop("kind", "implement"), **fields), now)
+    task, _ = add_task(data, replace(NewTask(title=title, kind="implement"), **fields), now)
     return task.id
 
 
