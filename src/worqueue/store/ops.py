@@ -414,6 +414,30 @@ class TaskEdit:
 
 
 EDIT_FIELDS = ("title", "status", "kind", "assignee", "due", "depends_on", "body")
+
+
+@dataclass(frozen=True)
+class EditResult:
+    """What ``edit_task`` did.
+
+    Attributes
+    ----------
+    task : Task
+        The task after the edit.
+    position : int or None
+        Its position, as ``show_task`` returns.
+    changed : tuple of str
+        Names of the changed fields in the order of ``EDIT_FIELDS``. Empty when
+        nothing changed.
+    description : str
+        How the fields changed, as written in the history (without the reason) and
+        the commit message. Empty when nothing changed.
+    """
+
+    task: Task
+    position: int | None
+    changed: tuple[str, ...]
+    description: str
 _FIELD_LABELS = {
     "title": "タイトル",
     "status": "状態",
@@ -431,7 +455,7 @@ def edit_task(
     reason: str | None,
     now: datetime,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
-) -> tuple[Task, int | None, tuple[str, ...]]:
+) -> EditResult:
     """Change a task's fields or body, write what changed in its history, and commit it.
 
     Changing nothing (every new value equals the current one) writes and commits
@@ -456,9 +480,9 @@ def edit_task(
 
     Returns
     -------
-    tuple of (Task, int or None, tuple of str)
-        The task after the edit, its position as ``show_task`` returns, and the
-        names of the changed fields in the order of ``EDIT_FIELDS``.
+    EditResult
+        The task after the edit, its position, the changed fields, and how they
+        changed.
 
     Raises
     ------
@@ -479,14 +503,14 @@ def edit_task(
     edit = replace(edit, body=_checked_body(edit.body))
     _check_edit_options(edit)
 
-    def prepare() -> tuple[tuple[Task, int | None, tuple[str, ...]], _Change | None]:
+    def prepare() -> tuple[EditResult, _Change | None]:
         task = _existing_task(data, task_id)
         _check_new_dependencies(data, task_id, edit.add_depends_on)
         edited = _edited(task, edit)
         changed = tuple(name for name in EDIT_FIELDS if _field_value(task, name) != _field_value(edited, name))
         queue = read_queue(data)
         if not changed:
-            return (task, _position(_shown_ids(data, queue, task), task_id), ()), None
+            return EditResult(task, _position(_shown_ids(data, queue, task), task_id), (), ""), None
         description = "、".join(_describe_change(name, task, edited) for name in changed)
         edited = _with_history(edited, now, description if reason is None else f"{description}: {reason}")
         reopened = task.status == "done" and edited.status != "done" and task_id not in queue
@@ -499,7 +523,8 @@ def edit_task(
                 written.append(write_queue(data, new_queue))
             return written
 
-        return (edited, position, changed), _Change(write, f"edit {task_id}: {description}")
+        result = EditResult(edited, position, changed, description)
+        return result, _Change(write, f"edit {task_id}: {description}")
 
     return _write_locked(data, lock_timeout, prepare)
 

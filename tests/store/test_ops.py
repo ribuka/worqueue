@@ -367,11 +367,11 @@ def test_edit_task_changes_the_dependencies_in_order(
         add(data, now)
     add(data, now, depends_on=(2, 3))
 
-    task, _, changed = edit_task(data, 5, edit, None, now)
+    result = edit_task(data, 5, edit, None, now)
 
-    assert task.depends_on == depends_on
+    assert result.task.depends_on == depends_on
     assert read_task(data, 5).depends_on == depends_on
-    assert changed == ("depends_on",)
+    assert result.changed == ("depends_on",)
 
 
 def test_edit_task_follows_dependencies_past_a_missing_file(data: Path, now: datetime) -> None:
@@ -383,9 +383,9 @@ def test_edit_task_follows_dependencies_past_a_missing_file(data: Path, now: dat
     (data / "tasks" / "1.md").unlink()
     write_queue(data, [2, 3])
 
-    task, _, _ = edit_task(data, 3, TaskEdit(add_depends_on=(2,), remove_depends_on=(1,)), None, now)
+    result = edit_task(data, 3, TaskEdit(add_depends_on=(2,), remove_depends_on=(1,)), None, now)
 
-    assert task.depends_on == (2,)
+    assert result.task.depends_on == (2,)
 
 
 def test_edit_task_keeps_a_done_task_out_of_the_queue_unless_reopened(data: Path, now: datetime, git: Git) -> None:
@@ -394,14 +394,15 @@ def test_edit_task_keeps_a_done_task_out_of_the_queue_unless_reopened(data: Path
     add(data, now)
     done_task(data, 1, None, now)
 
-    task, position, changed = edit_task(data, 1, TaskEdit(title="新しいタイトル"), None, now)
+    result = edit_task(data, 1, TaskEdit(title="新しいタイトル"), None, now)
 
-    assert (task.status, position, changed) == ("done", None, ("title",))
+    assert (result.task.status, result.position, result.changed) == ("done", None, ("title",))
     assert read_queue(data) == [2]
 
-    task, position, changed = edit_task(data, 1, TaskEdit(status="waiting"), None, now)
+    result = edit_task(data, 1, TaskEdit(status="waiting"), None, now)
 
-    assert (task.status, position, changed) == ("waiting", 2, ("status",))
+    assert (result.task.status, result.position, result.changed) == ("waiting", 2, ("status",))
+    assert result.description == "状態 done → waiting"
     assert read_queue(data) == [2, 1]
     assert sorted(git(data, "show", "--name-only", "--format=", "HEAD").split()) == ["queue.md", "tasks/1.md"]
 
@@ -413,9 +414,7 @@ def test_edit_task_reopens_a_done_task_left_in_the_queue_where_it_is(data: Path,
     mark_done_by_hand(data, 2)
     queue = (data / "queue.md").read_bytes()
 
-    _, position, _ = edit_task(data, 2, TaskEdit(status="todo"), None, now)
-
-    assert position == 2
+    assert edit_task(data, 2, TaskEdit(status="todo"), None, now).position == 2
     assert (data / "queue.md").read_bytes() == queue
 
 
