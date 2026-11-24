@@ -1,5 +1,6 @@
 """Operations on data/ (add, list): lock, read, write, and commit as one step."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -84,9 +85,7 @@ def add_task(
         raise WorqueueError(f"種別は {', '.join(KINDS)} のどれかにしてください: {new.kind}")
     if new.status not in STATUSES or new.status == "done":
         raise WorqueueError(f"作るタスクの状態は todo, doing, waiting のどれかにしてください: {new.status}")
-    check_git(data)
-    data.mkdir(parents=True, exist_ok=True)
-    with write_lock(data, lock_timeout):
+    def prepare() -> tuple[tuple[Task, int], _Change]:
         depends_on = tuple(dict.fromkeys(new.depends_on))
         for dependency in depends_on:
             if not task_path(data, dependency).is_file():
@@ -104,12 +103,17 @@ def add_task(
             created=now.astimezone().replace(microsecond=0).isoformat(),
             markdown=initial_markdown(new.body.strip(), now),
         )
-        written = ensure_repo(data)
-        written.append(write_task(data, task))
-        written.append(write_next_id(data, task.id + 1))
-        written.append(write_queue(data, [*queue, task.id]))
-        commit(data, written, f"add {task.id}: {task.title}")
-    return task, position
+
+        def write() -> list[Path]:
+            return [
+                write_task(data, task),
+                write_next_id(data, task.id + 1),
+                write_queue(data, [*queue, task.id]),
+            ]
+
+        return (task, position), _Change(write, f"add {task.id}: {task.title}")
+
+    return _write_locked(data, lock_timeout, prepare)
 
 
 def list_queue(data: Path) -> list[Task]:
@@ -133,6 +137,40 @@ def list_queue(data: Path) -> list[Task]:
         If ``queue.md`` or a task file in it is malformed or missing.
     """
     return _shown_tasks(data, read_queue(data))
+
+
+@dataclass(frozen=True)
+class _Change:
+    """The files an operation writes and the message of its commit.
+
+    Attributes
+    ----------
+    write : Callable[[], list[Path]]
+        Writes the files, in order, and returns their paths.
+    message : str
+        Commit message.
+    """
+
+    write: Callable[[], list[Path]]
+    message: str
+
+
+def _write_locked[T](data: Path, lock_timeout: float, prepare: Callable[[], tuple[T, _Change | None]]) -> T:
+    """Run one write operation: check git, lock, prepare, write, and commit.
+
+    ``prepare`` runs under the lock. It reads the files again and checks the input,
+    raising before anything is written, and returns the operation's result with the
+    change to make, or ``None`` to write and commit nothing.
+    """
+    check_git(data)
+    data.mkdir(parents=True, exist_ok=True)
+    with write_lock(data, lock_timeout):
+        result, change = prepare()
+        if change is not None:
+            written = ensure_repo(data)
+            written.extend(change.write())
+            commit(data, written, change.message)
+    return result
 
 
 def _one_line(label: str, value: str) -> str:
