@@ -370,6 +370,21 @@ CLI（エージェント）と Web UI とエディタが、同じファイルを
 - `position` と表の `#` は、`wq list` で出したタスクの中での 1 から始まる位置（出さなかった `done` のタスクは数えない）。`wq add` では、作ったタスクのその位置。
 - `due` はなければ `null`。本文と履歴は含めない。
 
+## CI（2026-11-25 決定）
+
+GitHub Actions のワークフロー `.github/workflows/ci.yml`（ワークフロー名 `CI`、ジョブ名 `test`）で lint とテストを走らせ、結果を PR のチェックとして見せる。
+
+- 契機：すべての `pull_request` と、`main` への `push` だけ。PR ごとの確認と、マージ後の `main` の確認の両方が要るため。他のブランチへの push だけでは走らせない。
+- 同じ PR（`main` では同じブランチ）の古い実行は `concurrency`（`group: ci-${{ github.event.pull_request.number || github.ref }}`、`cancel-in-progress: true`）で取り消す。レビューの修正で続けて push しても、最後の head の結果だけを待てばよいため。
+- `runs-on: windows-latest` だけで走らせる。ユーザーは Windows で使い、テストは Windows のファイルロックと git for Windows の動きを前提にしているため。ubuntu でだけ壊れる変更は見落とすが、ユーザーの使い方では問題にならないので受け入れる。
+- 手順：`actions/checkout` → `astral-sh/setup-uv`（`enable-cache: true`）→ `uv sync --locked` → `uv run -m ruff check .` → `uv run -m pytest --tb=short -q`。`timeout-minutes: 15`、`permissions: contents: read`。
+  - Python は `uv sync --locked` に任せ、`.python-version` の 3.13 を uv が入れる（`actions/setup-python` は使わない）。`--locked` なので、`uv.lock` が `pyproject.toml` と合っていなければ失敗する。
+  - git の設定（`user.name` など）は足さない。テストは `tests/conftest.py` の autouse の fixture で、`WORQUEUE_DATA` を一時ディレクトリにし、git をユーザーの設定から切り離し、コミットする人を環境変数で渡すため。`data/` はチェックアウトに無く、`.githooks` も有効にしない。
+- uv の版は指定しない（setup-uv の既定の最新版）。`uv.lock` が版をまたいで読めるうちは、版を上げる手間が要らないため。uv の更新で CI が壊れることがありうるが、まれなので受け入れ、起きたらそのときに版を固定する。
+- アクションの版は、実装した時点の最新版のタグで指定する（コミットの SHA では固定しない。自分専用のリポジトリでは、そこまでの供給網の脅威は小さいため）。
+  - `actions/checkout` はメジャー版のタグ `@v7`。
+  - `astral-sh/setup-uv` は `@v10.4.0`。setup-uv は v8.0.0 からメジャー版・マイナー版のタグを出さなくなり（版のタグは変更できないリリースだけ）、`@v10` が無いため（2026-11-25 確認）。
+
 ## パッケージ構成（2026-11-24 ユーザー判断）
 
 ```
