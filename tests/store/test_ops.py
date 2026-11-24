@@ -3,7 +3,7 @@
 import inspect
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -14,8 +14,10 @@ from worqueue.store.lock import write_lock
 from worqueue.store.ops import (
     MoveTarget,
     NewTask,
+    TaskEdit,
     add_task,
     done_task,
+    edit_task,
     list_queue,
     log_task,
     move_task,
@@ -263,8 +265,9 @@ def mark_done_by_hand(data: Path, task_id: int) -> None:
         lambda data, now: move_task(data, 1, MoveTarget("bottom"), "理由", now, lock_timeout=0.1),
         lambda data, now: done_task(data, 1, "理由", now, lock_timeout=0.1),
         lambda data, now: log_task(data, 1, "内容", now, lock_timeout=0.1),
+        lambda data, now: edit_task(data, 1, TaskEdit(status="doing"), "理由", now, lock_timeout=0.1),
     ],
-    ids=["move", "done", "log"],
+    ids=["move", "done", "log", "edit"],
 )
 def test_writing_operations_write_nothing_without_the_lock(
     data: Path, now: datetime, git: Git, operation: Callable[[Path, datetime], object]
@@ -285,7 +288,7 @@ def test_writing_operations_write_nothing_without_the_lock(
 
 def test_writing_operations_default_to_the_ten_second_lock() -> None:
     """Writing operations default to the ten-second lock."""
-    for operation in (move_task, done_task, log_task):
+    for operation in (move_task, done_task, log_task, edit_task):
         assert inspect.signature(operation).parameters["lock_timeout"].default == 10
 
 
@@ -343,3 +346,95 @@ def test_move_task_to_the_same_position_writes_and_commits_nothing(data: Path, n
     assert read_queue(data) == [1, 2]
     assert commit_count(git, data) == 2
     assert git(data, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize(
+    ("edit", "depends_on"),
+    [
+        (TaskEdit(add_depends_on=(4, 2, 4)), (2, 3, 4)),
+        (TaskEdit(remove_depends_on=(3, 4)), (2,)),
+        (TaskEdit(clear_depends_on=True), ()),
+        (TaskEdit(clear_depends_on=True, add_depends_on=(4, 2)), (4, 2)),
+        (TaskEdit(remove_depends_on=(2,), add_depends_on=(4,)), (3, 4)),
+    ],
+    ids=["add-keeps-order-and-skips-present", "remove-ignores-absent", "clear", "clear-and-add-replaces", "remove-then-add"],
+)
+def test_edit_task_changes_the_dependencies_in_order(
+    data: Path, now: datetime, edit: TaskEdit, depends_on: tuple[int, ...]
+) -> None:
+    """``edit_task`` clears, removes, then adds dependencies, keeping the order."""
+    for _ in range(4):
+        add(data, now)
+    add(data, now, depends_on=(2, 3))
+
+    task, _, changed = edit_task(data, 5, edit, None, now)
+
+    assert task.depends_on == depends_on
+    assert read_task(data, 5).depends_on == depends_on
+    assert changed == ("depends_on",)
+
+
+def test_edit_task_follows_dependencies_past_a_missing_file(data: Path, now: datetime) -> None:
+    """A dependency without a file is a dead end for the cycle check, and can be removed."""
+    add(data, now)
+    add(data, now)
+    add(data, now, depends_on=(1,))
+    write_task(data, replace(read_task(data, 2), depends_on=(9,)))
+    (data / "tasks" / "1.md").unlink()
+    write_queue(data, [2, 3])
+
+    task, _, _ = edit_task(data, 3, TaskEdit(add_depends_on=(2,), remove_depends_on=(1,)), None, now)
+
+    assert task.depends_on == (2,)
+
+
+def test_edit_task_keeps_a_done_task_out_of_the_queue_unless_reopened(data: Path, now: datetime, git: Git) -> None:
+    """Editing a done task's other fields leaves the queue; changing its status appends it."""
+    add(data, now)
+    add(data, now)
+    done_task(data, 1, None, now)
+
+    task, position, changed = edit_task(data, 1, TaskEdit(title="新しいタイトル"), None, now)
+
+    assert (task.status, position, changed) == ("done", None, ("title",))
+    assert read_queue(data) == [2]
+
+    task, position, changed = edit_task(data, 1, TaskEdit(status="waiting"), None, now)
+
+    assert (task.status, position, changed) == ("waiting", 2, ("status",))
+    assert read_queue(data) == [2, 1]
+    assert sorted(git(data, "show", "--name-only", "--format=", "HEAD").split()) == ["queue.md", "tasks/1.md"]
+
+
+def test_edit_task_reopens_a_done_task_left_in_the_queue_where_it_is(data: Path, now: datetime) -> None:
+    """A done task left in ``queue.md`` by hand comes back at its line."""
+    for _ in range(3):
+        add(data, now)
+    mark_done_by_hand(data, 2)
+    queue = (data / "queue.md").read_bytes()
+
+    _, position, _ = edit_task(data, 2, TaskEdit(status="todo"), None, now)
+
+    assert position == 2
+    assert (data / "queue.md").read_bytes() == queue
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [TaskEdit(due=date(2026, 12, 1), clear_due=True), TaskEdit(remove_depends_on=(1,), clear_depends_on=True)],
+    ids=["due", "depends_on"],
+)
+def test_edit_task_rejects_contradicting_options(data: Path, now: datetime, edit: TaskEdit) -> None:
+    """``edit_task`` rejects setting and clearing the same field as a caller's error."""
+    add(data, now)
+
+    with pytest.raises(ValueError, match="TaskEdit"):
+        edit_task(data, 1, edit, None, now)
+
+
+def test_edit_task_rejects_done_as_a_status(data: Path, now: datetime) -> None:
+    """``edit_task`` leaves making a task done to ``done_task``."""
+    add(data, now)
+
+    with pytest.raises(WorqueueError, match="状態は todo, doing, waiting のどれかにしてください: done"):
+        edit_task(data, 1, TaskEdit(status="done"), None, now)

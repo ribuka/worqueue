@@ -183,6 +183,57 @@ def append_history(markdown: str, line: str) -> str:
     return f"{stripped}\n\n{HISTORY_HEADING}\n\n{line}\n"
 
 
+def body_of(markdown: str) -> str:
+    """Return the body: the Markdown before the first history heading line.
+
+    Parameters
+    ----------
+    markdown : str
+        The Markdown after the front matter (body and history).
+
+    Returns
+    -------
+    str
+        The part before the first line that is just the history heading (all of
+        ``markdown`` without one), stripped of surrounding whitespace.
+    """
+    body, _ = _split_history(markdown)
+    return body.strip()
+
+
+def replace_body(markdown: str, body: str) -> str:
+    """Return ``markdown`` with its body replaced and its history kept as it is.
+
+    Parameters
+    ----------
+    markdown : str
+        The Markdown after the front matter (body and history).
+    body : str
+        The new body, already stripped. Empty for none.
+
+    Returns
+    -------
+    str
+        With a history heading line: a newline, the body and a blank line (if the
+        body is not empty), and everything from the heading line on. Without one:
+        the body between two newlines, or a single newline for an empty body.
+    """
+    _, history = _split_history(markdown)
+    if history is None:
+        return f"\n{body}\n" if body else "\n"
+    body_part = f"{body}\n\n" if body else ""
+    return f"\n{body_part}{history}"
+
+
+def _split_history(markdown: str) -> tuple[str, str | None]:
+    """Split ``markdown`` at its first history heading line: (before it, from it on, or None)."""
+    lines = markdown.split("\n")
+    if HISTORY_HEADING not in lines:
+        return markdown, None
+    at = lines.index(HISTORY_HEADING)
+    return "\n".join(lines[:at]), "\n".join(lines[at:])
+
+
 def write_task(data: Path, task: Task) -> Path:
     """Write a task's file.
 

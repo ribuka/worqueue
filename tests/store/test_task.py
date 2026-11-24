@@ -10,8 +10,10 @@ from worqueue.store.errors import WorqueueError
 from worqueue.store.task import (
     Task,
     append_history,
+    body_of,
     initial_markdown,
     read_task,
+    replace_body,
     task_ids,
     task_path,
     write_task,
@@ -178,6 +180,46 @@ LINE = "- 2026-11-25 10:00 足した"
 def test_append_history_adds_one_line_at_the_end(markdown: str, expected: str) -> None:
     """``append_history`` adds one line at the end."""
     assert append_history(markdown, LINE) == expected
+
+
+HISTORY = "## 履歴\n\n- 2026-11-24 09:10 作成\n"
+
+
+@pytest.mark.parametrize(
+    ("markdown", "body", "expected"),
+    [
+        (f"\n古い本文\n\n{HISTORY}", "新しい本文", f"\n新しい本文\n\n{HISTORY}"),
+        (f"\n古い本文\n\n{HISTORY}", "", f"\n{HISTORY}"),
+        (f"\n{HISTORY}", "新しい本文", f"\n新しい本文\n\n{HISTORY}"),
+        (
+            f"\n古い\n\n{HISTORY}\n### メモ\n\n手の行\n",
+            "新しい\n2 行目",
+            f"\n新しい\n2 行目\n\n{HISTORY}\n### メモ\n\n手の行\n",
+        ),
+        ("\n古い本文\n", "新しい本文", "\n新しい本文\n"),
+        ("\n古い本文\n", "", "\n"),
+    ],
+    ids=["replace", "to-empty", "from-empty", "keeps-text-after-history", "no-heading", "no-heading-to-empty"],
+)
+def test_replace_body_replaces_only_the_part_before_the_history(markdown: str, body: str, expected: str) -> None:
+    """``replace_body`` replaces the part before the history heading and keeps the rest as it is."""
+    assert replace_body(markdown, body) == expected
+    assert body_of(expected) == body
+
+
+@pytest.mark.parametrize(
+    ("markdown", "body"),
+    [
+        (f"\n  本文\n\n2 段落目\n\n{HISTORY}", "本文\n\n2 段落目"),
+        (f"\n{HISTORY}", ""),
+        ("\n本文だけ\n", "本文だけ"),
+        (f"\n本文\n\n{HISTORY}\n## 履歴\n\n- 手の行\n", "本文"),
+    ],
+    ids=["with-history", "empty", "no-heading", "second-heading"],
+)
+def test_body_of_returns_the_part_before_the_first_history_heading(markdown: str, body: str) -> None:
+    """``body_of`` returns the stripped part before the first history heading."""
+    assert body_of(markdown) == body
 
 
 def test_summary_accepts_no_position(now: datetime) -> None:
