@@ -9,6 +9,7 @@ import pytest
 from worqueue.store.errors import WorqueueError
 from worqueue.store.task import (
     Task,
+    append_history,
     initial_markdown,
     read_task,
     task_ids,
@@ -141,3 +142,44 @@ def test_task_ids_lists_numbered_files_only(data: Path, now: datetime) -> None:
     (data / "tasks" / "notes.md").write_text("", encoding="utf-8")
 
     assert sorted(task_ids(data)) == [3, 10]
+
+
+LINE = "- 2026-11-25 10:00 足した"
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        (
+            "\n本文\n\n## 履歴\n\n- 2026-11-24 09:10 作成\n",
+            f"\n本文\n\n## 履歴\n\n- 2026-11-24 09:10 作成\n{LINE}\n",
+        ),
+        ("\n## 履歴\n\n- 2026-11-24 09:10 作成\n\n\n", f"\n## 履歴\n\n- 2026-11-24 09:10 作成\n{LINE}\n"),
+        ("\n本文\n\n## 履歴\n", f"\n本文\n\n## 履歴\n\n{LINE}\n"),
+        ("\n本文\n\n## 履歴\n\n", f"\n本文\n\n## 履歴\n\n{LINE}\n"),
+        ("\n## 履歴\n\n- 作成\n\n### メモ\n\n手の行\n", f"\n## 履歴\n\n- 作成\n\n### メモ\n\n手の行\n{LINE}\n"),
+        ("\n本文\n", f"\n本文\n\n## 履歴\n\n{LINE}\n"),
+        ("\n本文の ## 履歴 は見出しでない", f"\n本文の ## 履歴 は見出しでない\n\n## 履歴\n\n{LINE}\n"),
+        ("\n", f"\n## 履歴\n\n{LINE}\n"),
+        ("", f"\n## 履歴\n\n{LINE}\n"),
+    ],
+    ids=[
+        "after-entries",
+        "trailing-blank-lines",
+        "heading-last",
+        "heading-last-with-blank",
+        "after-other-text",
+        "no-heading",
+        "heading-text-inside-a-line",
+        "empty-newline",
+        "empty",
+    ],
+)
+def test_append_history_adds_one_line_at_the_end(markdown: str, expected: str) -> None:
+    """``append_history`` adds one line at the end."""
+    assert append_history(markdown, LINE) == expected
+
+
+def test_summary_accepts_no_position(now: datetime) -> None:
+    """``summary`` accepts no position."""
+    assert make_task(now).summary(None)["position"] is None

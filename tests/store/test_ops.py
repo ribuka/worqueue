@@ -2,6 +2,7 @@
 
 import inspect
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -10,8 +11,18 @@ from filelock import FileLock
 
 from worqueue.store.errors import WorqueueError
 from worqueue.store.lock import write_lock
-from worqueue.store.ops import NewTask, add_task, list_queue
+from worqueue.store.ops import (
+    MoveTarget,
+    NewTask,
+    add_task,
+    done_task,
+    list_queue,
+    log_task,
+    move_task,
+    show_task,
+)
 from worqueue.store.queue import read_queue, write_queue
+from worqueue.store.task import read_task, write_task
 
 Git = Callable[..., str]
 
@@ -239,3 +250,96 @@ def test_list_queue_reports_a_queued_task_without_a_file(data: Path, now: dateti
 
     with pytest.raises(WorqueueError, match="タスク 1 のファイルがありません"):
         list_queue(data)
+
+
+def mark_done_by_hand(data: Path, task_id: int) -> None:
+    """Set a task's status to ``done`` in its file, leaving it in ``queue.md``."""
+    write_task(data, replace(read_task(data, task_id), status="done"))
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda data, now: move_task(data, 1, MoveTarget("bottom"), "理由", now, lock_timeout=0.1),
+        lambda data, now: done_task(data, 1, "理由", now, lock_timeout=0.1),
+        lambda data, now: log_task(data, 1, "内容", now, lock_timeout=0.1),
+    ],
+    ids=["move", "done", "log"],
+)
+def test_writing_operations_write_nothing_without_the_lock(
+    data: Path, now: datetime, git: Git, operation: Callable[[Path, datetime], object]
+) -> None:
+    """Writing operations write nothing without the lock."""
+    add(data, now)
+    add(data, now)
+    files = {p.name: p.read_bytes() for p in (data / "tasks").iterdir()}
+    queue = (data / "queue.md").read_bytes()
+
+    with FileLock(data / ".lock"), pytest.raises(WorqueueError, match="ロック"):
+        operation(data, now)
+
+    assert {p.name: p.read_bytes() for p in (data / "tasks").iterdir()} == files
+    assert (data / "queue.md").read_bytes() == queue
+    assert commit_count(git, data) == 2
+
+
+def test_writing_operations_default_to_the_ten_second_lock() -> None:
+    """Writing operations default to the ten-second lock."""
+    for operation in (move_task, done_task, log_task):
+        assert inspect.signature(operation).parameters["lock_timeout"].default == 10
+
+
+def test_show_task_has_no_position_for_a_done_task_or_one_out_of_the_queue(data: Path, now: datetime) -> None:
+    """``show_task`` has no position for a done task or one out of the queue."""
+    for _ in range(3):
+        add(data, now)
+    mark_done_by_hand(data, 1)
+    write_queue(data, [1, 2])
+
+    assert [show_task(data, task_id)[1] for task_id in (1, 2, 3)] == [None, 1, None]
+
+
+@pytest.mark.parametrize(
+    ("task_id", "target", "positions", "queue"),
+    [
+        (4, MoveTarget("top"), (3, 1), [4, 1, 2, 3, 5]),
+        (1, MoveTarget("bottom"), (1, 4), [2, 3, 4, 5, 1]),
+        (1, MoveTarget("to", 2), (1, 2), [2, 3, 1, 4, 5]),
+        (5, MoveTarget("before", 3), (4, 2), [1, 2, 5, 3, 4]),
+        (1, MoveTarget("after", 3), (1, 2), [2, 3, 1, 4, 5]),
+    ],
+    ids=["top", "bottom", "to", "before", "after"],
+)
+def test_move_task_counts_positions_without_done_tasks_and_keeps_their_lines(
+    data: Path,
+    now: datetime,
+    task_id: int,
+    target: MoveTarget,
+    positions: tuple[int, int],
+    queue: list[int],
+) -> None:
+    """``move_task`` counts positions without done tasks and keeps their lines."""
+    for _ in range(5):
+        add(data, now)
+    mark_done_by_hand(data, 2)
+
+    _, start, end = move_task(data, task_id, target, None, now)
+
+    assert (start, end) == positions
+    assert read_queue(data) == queue
+    assert [t.id for t in list_queue(data)] == [i for i in queue if i != 2]
+
+
+def test_move_task_to_the_same_position_writes_and_commits_nothing(data: Path, now: datetime, git: Git) -> None:
+    """``move_task`` to the same position writes and commits nothing."""
+    add(data, now)
+    add(data, now)
+    before = (data / "tasks" / "2.md").read_bytes()
+
+    task, start, end = move_task(data, 2, MoveTarget("bottom"), "理由", now)
+
+    assert (task.id, start, end) == (2, 2, 2)
+    assert (data / "tasks" / "2.md").read_bytes() == before
+    assert read_queue(data) == [1, 2]
+    assert commit_count(git, data) == 2
+    assert git(data, "status", "--porcelain") == ""
