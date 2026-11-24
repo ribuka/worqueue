@@ -1,6 +1,7 @@
 """The ``wq`` command: building the parser, reporting errors, and exit codes."""
 
 import argparse
+import io
 import sys
 
 from worqueue.cli import add, done, listing, log, move, show
@@ -60,5 +61,6 @@ def run(argv: list[str] | None = None) -> int:
 def main() -> None:
     """Entry point of ``wq``: make the output UTF-8, run, and exit with the code."""
     for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(encoding="utf-8")
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
     sys.exit(run())
