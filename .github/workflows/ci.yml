@@ -25,3 +25,4 @@ jobs:
       - run: uv run -m ruff check .
       - run: uv run -m ty check
       - run: uv run -m pytest --tb=short -q
+      - run: uv run -m pytest -m e2e --tb=short -q

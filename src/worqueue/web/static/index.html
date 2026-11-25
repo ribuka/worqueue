@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Worqueue</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="module" src="/static/js/app.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <h1>Worqueue</h1>
+    <span id="count" class="muted"></span>
+    <span id="ratio"></span>
+  </header>
+  <div id="error" class="error" role="alert" hidden></div>
+
+  <form id="add-form" class="add-form">
+    <input id="add-title" placeholder="タイトル" required>
+    <select id="add-kind" aria-label="種別">
+      <option value="implement">実装</option>
+      <option value="manage">管理</option>
+    </select>
+    <input id="add-assignee" value="me" aria-label="担当" size="8">
+    <input id="add-due" type="date" aria-label="期限">
+    <button id="add-submit" type="submit">追加</button>
+  </form>
+
+  <main class="layout">
+    <section class="queue-pane">
+      <table class="queue">
+        <thead>
+          <tr><th>#</th><th>ID</th><th>タイトル</th><th>状態</th><th>種別</th><th>担当</th><th>期限</th></tr>
+        </thead>
+        <tbody id="queue"></tbody>
+      </table>
+      <p id="queue-empty" class="muted" hidden>キューは空です</p>
+    </section>
+
+    <aside id="detail" class="detail" hidden>
+      <div class="detail-head">
+        <h2 id="detail-title"></h2>
+        <button id="detail-close" type="button">閉じる</button>
+      </div>
+      <form id="edit-form" class="fields">
+        <label>タイトル <input id="edit-title" required></label>
+        <label>状態
+          <select id="edit-status">
+            <option value="todo">todo</option>
+            <option value="doing">doing</option>
+            <option value="waiting">waiting</option>
+          </select>
+        </label>
+        <label>種別
+          <select id="edit-kind">
+            <option value="implement">実装</option>
+            <option value="manage">管理</option>
+          </select>
+        </label>
+        <label>担当 <input id="edit-assignee" required></label>
+        <label>期限 <input id="edit-due" type="date"></label>
+        <label>依存先 <input id="edit-depends-on" placeholder="例: 3, 5"></label>
+        <label class="wide">本文 <textarea id="edit-body" rows="6"></textarea></label>
+        <label class="wide">理由（任意） <input id="edit-reason"></label>
+        <button id="edit-save" type="submit">保存</button>
+      </form>
+
+      <h3>履歴</h3>
+      <pre id="history"></pre>
+      <form id="log-form" class="inline">
+        <input id="log-content" placeholder="履歴に追記する内容" required>
+        <button id="log-submit" type="submit">追記</button>
+      </form>
+
+      <form id="done-form" class="inline">
+        <input id="done-reason" placeholder="完了の理由（任意）">
+        <button id="done-submit" type="submit">完了にする</button>
+      </form>
+    </aside>
+  </main>
+</body>
+</html>

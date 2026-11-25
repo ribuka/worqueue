@@ -1,0 +1,167 @@
+:root {
+  color-scheme: light dark;
+  --border: color-mix(in srgb, currentColor 18%, transparent);
+  --muted: color-mix(in srgb, currentColor 60%, transparent);
+  --accent: #2f6fde;
+  font-family: system-ui, "Segoe UI", "Yu Gothic UI", sans-serif;
+  font-size: 14px;
+}
+
+body {
+  margin: 0;
+  padding: 0 16px 16px;
+}
+
+.bar {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.bar h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, #d33 18%, transparent);
+  border: 1px solid #d33;
+}
+
+.add-form,
+.inline {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.add-form #add-title,
+.inline input {
+  flex: 1;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  padding: 4px 6px;
+}
+
+.layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.queue-pane {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.queue th,
+.queue td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.queue td:nth-child(3) {
+  white-space: normal;
+  width: 100%;
+}
+
+.queue tbody tr {
+  cursor: grab;
+}
+
+.queue tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.queue tr.drop-before td {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.queue tr.drop-after td {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.status-doing {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.status-waiting {
+  color: #b7791f;
+}
+
+.detail {
+  width: 420px;
+  flex-shrink: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.detail-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fields label > * {
+  color: CanvasText;
+}
+
+.fields .wide {
+  grid-column: 1 / -1;
+}
+
+.detail h3 {
+  margin: 16px 0 4px;
+  font-size: 14px;
+}
+
+#history {
+  white-space: pre-wrap;
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  font-family: inherit;
+}
