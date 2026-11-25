@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from filelock import FileLock
 
-from worqueue.store.errors import WorqueueError
+from worqueue.store.errors import StaleError, WorqueueError
 from worqueue.store.lock import write_lock
 from worqueue.store.ops import (
     MoveTarget,
@@ -25,6 +25,7 @@ from worqueue.store.ops import (
 )
 from worqueue.store.queue import read_queue, write_queue
 from worqueue.store.task import read_task, write_task
+from worqueue.store.versions import FileVersion, file_version
 
 Git = Callable[..., str]
 
@@ -356,8 +357,18 @@ def test_move_task_to_the_same_position_writes_and_commits_nothing(data: Path, n
         (TaskEdit(clear_depends_on=True), ()),
         (TaskEdit(clear_depends_on=True, add_depends_on=(4, 2)), (4, 2)),
         (TaskEdit(remove_depends_on=(2,), add_depends_on=(4,)), (3, 4)),
+        (TaskEdit(depends_on=(4, 3)), (3, 4)),
+        (TaskEdit(depends_on=()), ()),
     ],
-    ids=["add-keeps-order-and-skips-present", "remove-ignores-absent", "clear", "clear-and-add-replaces", "remove-then-add"],
+    ids=[
+        "add-keeps-order-and-skips-present",
+        "remove-ignores-absent",
+        "clear",
+        "clear-and-add-replaces",
+        "remove-then-add",
+        "whole-list-keeps-then-adds",
+        "whole-list-empty",
+    ],
 )
 def test_edit_task_changes_the_dependencies_in_order(
     data: Path, now: datetime, edit: TaskEdit, depends_on: tuple[int, ...]
@@ -386,6 +397,19 @@ def test_edit_task_follows_dependencies_past_a_missing_file(data: Path, now: dat
     result = edit_task(data, 3, TaskEdit(add_depends_on=(2,), remove_depends_on=(1,)), None, now)
 
     assert result.task.depends_on == (2,)
+
+
+def test_edit_task_checks_only_the_new_ids_of_a_whole_dependency_list(data: Path, now: datetime) -> None:
+    """With ``depends_on``, a kept dependency without a file stays, and a new missing one is refused."""
+    add(data, now)
+    add(data, now)
+    add(data, now, depends_on=(1,))
+    (data / "tasks" / "1.md").unlink()
+    write_queue(data, [2, 3])
+
+    assert edit_task(data, 3, TaskEdit(depends_on=(1, 2)), None, now).task.depends_on == (1, 2)
+    with pytest.raises(WorqueueError, match="タスク 9 がありません"):
+        edit_task(data, 3, TaskEdit(depends_on=(1, 2, 9)), None, now)
 
 
 def test_edit_task_keeps_a_done_task_out_of_the_queue_unless_reopened(data: Path, now: datetime, git: Git) -> None:
@@ -420,8 +444,13 @@ def test_edit_task_reopens_a_done_task_left_in_the_queue_where_it_is(data: Path,
 
 @pytest.mark.parametrize(
     "edit",
-    [TaskEdit(due=date(2026, 12, 1), clear_due=True), TaskEdit(remove_depends_on=(1,), clear_depends_on=True)],
-    ids=["due", "depends_on"],
+    [
+        TaskEdit(due=date(2026, 12, 1), clear_due=True),
+        TaskEdit(remove_depends_on=(1,), clear_depends_on=True),
+        TaskEdit(depends_on=(1,), add_depends_on=(2,)),
+        TaskEdit(depends_on=(), clear_depends_on=True),
+    ],
+    ids=["due", "depends_on", "whole-list-and-add", "whole-list-and-clear"],
 )
 def test_edit_task_rejects_contradicting_options(data: Path, now: datetime, edit: TaskEdit) -> None:
     """``edit_task`` rejects setting and clearing the same field as a caller's error."""
@@ -437,3 +466,97 @@ def test_edit_task_rejects_done_as_a_status(data: Path, now: datetime) -> None:
 
     with pytest.raises(WorqueueError, match="状態は todo, doing, waiting のどれかにしてください: done"):
         edit_task(data, 1, TaskEdit(status="done"), None, now)
+
+
+
+def task_version(data: Path, task_id: int) -> FileVersion:
+    """Return the current version of a task's file."""
+    path = data / "tasks" / f"{task_id}.md"
+    return FileVersion(path, file_version(path))
+
+
+def queue_version(data: Path) -> FileVersion:
+    """Return the current version of ``queue.md``."""
+    return FileVersion(data / "queue.md", file_version(data / "queue.md"))
+
+
+def change_task(data: Path, now: datetime) -> None:
+    """Change task 1's file, as another writer would."""
+    edit_task(data, 1, TaskEdit(title="別の人が変えた"), None, now)
+
+
+def change_queue(data: Path, now: datetime) -> None:
+    """Change ``queue.md``, as another writer would."""
+    move_task(data, 2, MoveTarget("top"), None, now)
+
+
+VERSIONED_OPERATIONS = [
+    pytest.param(
+        lambda data, now, expected: edit_task(data, 1, TaskEdit(status="doing"), None, now, expected=expected),
+        lambda data: task_version(data, 1),
+        change_task,
+        id="edit",
+    ),
+    pytest.param(
+        lambda data, now, expected: log_task(data, 1, "内容", now, expected=expected),
+        lambda data: task_version(data, 1),
+        change_task,
+        id="log",
+    ),
+    pytest.param(
+        lambda data, now, expected: done_task(data, 1, None, now, expected=expected),
+        lambda data: task_version(data, 1),
+        change_task,
+        id="done",
+    ),
+    pytest.param(
+        lambda data, now, expected: move_task(data, 1, MoveTarget("bottom"), None, now, expected=expected),
+        queue_version,
+        change_queue,
+        id="move",
+    ),
+]
+
+
+@pytest.mark.parametrize(("operation", "version_of", "change"), VERSIONED_OPERATIONS)
+def test_writing_operations_refuse_a_stale_version_without_writing(
+    data: Path,
+    now: datetime,
+    git: Git,
+    operation: Callable[..., object],
+    version_of: Callable[[Path], FileVersion],
+    change: Callable[[Path, datetime], None],
+) -> None:
+    """A version read before the file changed makes the operation write nothing."""
+    add(data, now)
+    add(data, now)
+    stale = version_of(data)
+    change(data, now)
+    files = {p.name: p.read_bytes() for p in (data / "tasks").iterdir()}
+    queue = (data / "queue.md").read_bytes()
+    commits = commit_count(git, data)
+
+    with pytest.raises(StaleError, match="変わりました"):
+        operation(data, now, (stale,))
+
+    assert {p.name: p.read_bytes() for p in (data / "tasks").iterdir()} == files
+    assert (data / "queue.md").read_bytes() == queue
+    assert commit_count(git, data) == commits
+
+
+@pytest.mark.parametrize(("operation", "version_of", "change"), VERSIONED_OPERATIONS)
+def test_writing_operations_write_with_the_current_version(
+    data: Path,
+    now: datetime,
+    git: Git,
+    operation: Callable[..., object],
+    version_of: Callable[[Path], FileVersion],
+    change: Callable[[Path, datetime], None],
+) -> None:
+    """The current version lets the operation write and commit as without one."""
+    add(data, now)
+    add(data, now)
+
+    operation(data, now, (version_of(data),))
+
+    assert commit_count(git, data) == 3

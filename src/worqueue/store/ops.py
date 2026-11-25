@@ -25,6 +25,7 @@ from worqueue.store.task import (
     task_path,
     write_task,
 )
+from worqueue.store.versions import FileVersion, check_versions
 
 
 @dataclass(frozen=True)
@@ -174,7 +175,13 @@ def show_task(data: Path, task_id: int) -> tuple[Task, int | None]:
 
 
 def log_task(
-    data: Path, task_id: int, content: str, now: datetime, lock_timeout: float = LOCK_TIMEOUT_SECONDS
+    data: Path,
+    task_id: int,
+    content: str,
+    now: datetime,
+    lock_timeout: float = LOCK_TIMEOUT_SECONDS,
+    *,
+    expected: tuple[FileVersion, ...] = (),
 ) -> tuple[Task, int | None]:
     """Add one entry to a task's history and commit it.
 
@@ -190,6 +197,9 @@ def log_task(
         Time of the entry.
     lock_timeout : float
         Seconds to wait for the write lock.
+    expected : tuple of FileVersion
+        Versions of the files the caller read, checked under the lock before
+        anything is read or written.
 
     Returns
     -------
@@ -201,6 +211,7 @@ def log_task(
     WorqueueError
         If the content is empty or spans lines, the task does not exist, data/ is
         malformed, git is unusable, the lock is not acquired, or the commit fails.
+        ``StaleError`` (a subclass) if a file of ``expected`` changed.
     """
     content = _one_line("内容", content)
 
@@ -209,11 +220,17 @@ def log_task(
         position = _position(_shown_ids(data, read_queue(data)), task_id)
         return (task, position), _Change(lambda: [write_task(data, task)], f"log {task_id}: {content}")
 
-    return _write_locked(data, lock_timeout, prepare)
+    return _write_locked(data, lock_timeout, prepare, expected)
 
 
 def done_task(
-    data: Path, task_id: int, reason: str | None, now: datetime, lock_timeout: float = LOCK_TIMEOUT_SECONDS
+    data: Path,
+    task_id: int,
+    reason: str | None,
+    now: datetime,
+    lock_timeout: float = LOCK_TIMEOUT_SECONDS,
+    *,
+    expected: tuple[FileVersion, ...] = (),
 ) -> Task:
     """Mark a task ``done``, take it out of the queue, and commit it.
 
@@ -229,6 +246,9 @@ def done_task(
         Time of the history entry.
     lock_timeout : float
         Seconds to wait for the write lock.
+    expected : tuple of FileVersion
+        Versions of the files the caller read, checked under the lock before
+        anything is read or written.
 
     Returns
     -------
@@ -241,6 +261,7 @@ def done_task(
         If the reason is empty or spans lines, the task does not exist or is already
         ``done``, data/ is malformed, git is unusable, the lock is not acquired, or
         the commit fails.
+        ``StaleError`` (a subclass) if a file of ``expected`` changed.
     """
     reason = None if reason is None else _one_line("理由", reason)
 
@@ -259,7 +280,7 @@ def done_task(
 
         return task, _Change(write, f"done {task_id}: {task.title}")
 
-    return _write_locked(data, lock_timeout, prepare)
+    return _write_locked(data, lock_timeout, prepare, expected)
 
 
 @dataclass(frozen=True)
@@ -286,6 +307,8 @@ def move_task(
     reason: str | None,
     now: datetime,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
+    *,
+    expected: tuple[FileVersion, ...] = (),
 ) -> tuple[Task, int, int]:
     """Move a task within the queue and commit it.
 
@@ -308,6 +331,9 @@ def move_task(
         Time of the history entry.
     lock_timeout : float
         Seconds to wait for the write lock.
+    expected : tuple of FileVersion
+        Versions of the files the caller read, checked under the lock before
+        anything is read or written.
 
     Returns
     -------
@@ -320,6 +346,7 @@ def move_task(
         If the reason is empty or spans lines, a task does not exist or has no
         position, the target is out of range or the task itself, data/ is malformed,
         git is unusable, the lock is not acquired, or the commit fails.
+        ``StaleError`` (a subclass) if a file of ``expected`` changed.
     """
     reason = None if reason is None else _one_line("理由", reason)
 
@@ -347,7 +374,7 @@ def move_task(
 
         return (task, start, end), _Change(write, f"move {task_id}: {start} → {end}")
 
-    return _write_locked(data, lock_timeout, prepare)
+    return _write_locked(data, lock_timeout, prepare, expected)
 
 
 def _target_index(data: Path, task_id: int, target: MoveTarget, shown: list[int], others: list[int]) -> int:
@@ -396,6 +423,11 @@ class TaskEdit:
         IDs to take out of the dependencies. Not with ``clear_depends_on``.
     clear_depends_on : bool
         Start the dependencies from none (then ``add_depends_on`` replaces them).
+    depends_on : tuple of int or None
+        The whole new list of dependencies, resolved against the file read under the
+        lock: IDs not in it are removed, and IDs not yet there are added (and
+        checked) in order. Not with ``add_depends_on``, ``remove_depends_on``, or
+        ``clear_depends_on``.
     body : str or None
         New body, replacing the Markdown before the history. Surrounding whitespace
         is removed; empty for none.
@@ -410,6 +442,7 @@ class TaskEdit:
     add_depends_on: tuple[int, ...] = ()
     remove_depends_on: tuple[int, ...] = ()
     clear_depends_on: bool = False
+    depends_on: tuple[int, ...] | None = None
     body: str | None = None
 
 
@@ -455,6 +488,8 @@ def edit_task(
     reason: str | None,
     now: datetime,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
+    *,
+    expected: tuple[FileVersion, ...] = (),
 ) -> EditResult:
     """Change a task's fields or body, write what changed in its history, and commit it.
 
@@ -477,6 +512,9 @@ def edit_task(
         Time of the history entry.
     lock_timeout : float
         Seconds to wait for the write lock.
+    expected : tuple of FileVersion
+        Versions of the files the caller read, checked under the lock before
+        anything is read or written.
 
     Returns
     -------
@@ -490,9 +528,10 @@ def edit_task(
         If a value is invalid, a dependency to add is the task itself, does not
         exist, or makes a cycle, the task does not exist, data/ is malformed, git is
         unusable, the lock is not acquired, or the commit fails.
+        ``StaleError`` (a subclass) if a file of ``expected`` changed.
     ValueError
-        If ``edit`` sets both ``due`` and ``clear_due``, or both
-        ``remove_depends_on`` and ``clear_depends_on``.
+        If ``edit`` sets both ``due`` and ``clear_due``, both ``remove_depends_on``
+        and ``clear_depends_on``, or ``depends_on`` with another dependency option.
     """
     edit = replace(
         edit,
@@ -505,8 +544,9 @@ def edit_task(
 
     def prepare() -> tuple[EditResult, _Change | None]:
         task = _existing_task(data, task_id)
-        _check_new_dependencies(data, task_id, edit.add_depends_on)
-        edited = _edited(task, edit)
+        resolved = _resolved_dependencies(edit, task.depends_on)
+        _check_new_dependencies(data, task_id, resolved.add_depends_on)
+        edited = _edited(task, resolved)
         changed = tuple(name for name in EDIT_FIELDS if _field_value(task, name) != _field_value(edited, name))
         queue = read_queue(data)
         if not changed:
@@ -526,7 +566,7 @@ def edit_task(
         result = EditResult(edited, position, changed, description)
         return result, _Change(write, f"edit {task_id}: {description}")
 
-    return _write_locked(data, lock_timeout, prepare)
+    return _write_locked(data, lock_timeout, prepare, expected)
 
 
 def _checked_body(body: str | None) -> str | None:
@@ -550,6 +590,8 @@ def _check_edit_options(edit: TaskEdit) -> None:
         raise ValueError("TaskEdit cannot set both due and clear_due")
     if edit.remove_depends_on and edit.clear_depends_on:
         raise ValueError("TaskEdit cannot set both remove_depends_on and clear_depends_on")
+    if edit.depends_on is not None and (edit.add_depends_on or edit.remove_depends_on or edit.clear_depends_on):
+        raise ValueError("TaskEdit cannot set depends_on with another dependency option")
     if edit.status is not None and edit.status not in OPEN_STATUSES:
         raise WorqueueError(f"状態は {', '.join(OPEN_STATUSES)} のどれかにしてください: {edit.status}")
     if edit.kind is not None and edit.kind not in KINDS:
@@ -602,6 +644,18 @@ def _edited(task: Task, edit: TaskEdit) -> Task:
         due=None if edit.clear_due else task.due if edit.due is None else edit.due,
         depends_on=_edited_dependencies(task.depends_on, edit),
         markdown=markdown,
+    )
+
+
+def _resolved_dependencies(edit: TaskEdit, current: tuple[int, ...]) -> TaskEdit:
+    """Return ``edit`` with ``depends_on`` turned into the IDs to remove from and add to ``current``."""
+    if edit.depends_on is None:
+        return edit
+    return replace(
+        edit,
+        depends_on=None,
+        add_depends_on=tuple(i for i in edit.depends_on if i not in current),
+        remove_depends_on=tuple(i for i in current if i not in edit.depends_on),
     )
 
 
@@ -677,16 +731,23 @@ class _Change:
     message: str
 
 
-def _write_locked[T](data: Path, lock_timeout: float, prepare: Callable[[], tuple[T, _Change | None]]) -> T:
-    """Run one write operation: check git, lock, prepare, write, and commit.
+def _write_locked[T](
+    data: Path,
+    lock_timeout: float,
+    prepare: Callable[[], tuple[T, _Change | None]],
+    expected: tuple[FileVersion, ...] = (),
+) -> T:
+    """Run one write operation: check git, lock, check the versions, prepare, write, and commit.
 
-    ``prepare`` runs under the lock. It reads the files again and checks the input,
-    raising before anything is written, and returns the operation's result with the
-    change to make, or ``None`` to write and commit nothing.
+    ``expected`` is checked first under the lock, raising ``StaleError`` before
+    anything is written. ``prepare`` runs under the lock after it. It reads the files
+    again and checks the input, raising before anything is written, and returns the
+    operation's result with the change to make, or ``None`` to write and commit nothing.
     """
     check_git(data)
     data.mkdir(parents=True, exist_ok=True)
     with write_lock(data, lock_timeout):
+        check_versions(data, expected)
         result, change = prepare()
         if change is not None:
             written = ensure_repo(data)

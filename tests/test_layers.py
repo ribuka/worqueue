@@ -3,14 +3,16 @@
 import ast
 from pathlib import Path
 
-import worqueue.store
+import pytest
 
-STORE_DIR = Path(worqueue.store.__file__).parent
+import worqueue
+
+PACKAGE_DIR = Path(worqueue.__file__).parent
 
 
 def imported_modules(path: Path) -> list[str]:
     """Return the absolute names a source file imports, with ``from x import y`` as ``x.y``."""
-    package = ["worqueue", "store", *path.relative_to(STORE_DIR).parent.parts]
+    package = ["worqueue", *path.relative_to(PACKAGE_DIR).parent.parts]
     names: list[str] = []
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
@@ -22,15 +24,17 @@ def imported_modules(path: Path) -> list[str]:
     return names
 
 
-def test_store_does_not_import_cli() -> None:
-    """``worqueue.store`` does not import ``worqueue.cli``."""
-    sources = sorted(STORE_DIR.rglob("*.py"))
+@pytest.mark.parametrize("package", ["store", "web"])
+def test_package_does_not_import_cli(package: str) -> None:
+    """``worqueue.store`` and ``worqueue.web`` do not import ``worqueue.cli``."""
+    sources = sorted((PACKAGE_DIR / package).rglob("*.py"))
     assert sources
 
     offending = {
-        str(path.relative_to(STORE_DIR)): name
+        str(path.relative_to(PACKAGE_DIR)): name
         for path in sources
         for name in imported_modules(path)
         if name == "worqueue.cli" or name.startswith("worqueue.cli.")
     }
     assert offending == {}
+

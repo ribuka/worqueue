@@ -274,7 +274,7 @@ CLI（エージェント）と Web UI とエディタが、同じファイルを
   6. 書いたファイルだけをコミットし、ロックを外す。
   - 書いたあとにコミットが失敗したら、書いたファイルは戻さず、「ファイルは書いたがコミットできなかった」と分かるエラーにする。理由：書いてからの失敗はまれで、戻すとかえってデータを失いうるため。
 - 読むだけの操作はロックを取らない。一時ファイル + `os.replace` で書くので、読む側は書きかけのファイルを見ない。タスクのファイルを `queue.md` より先に書くので、キューにあるのにファイルがない状態も見ない。複数のファイルにまたがる読みは一貫しないことがあるが、受け入れる。
-- Web UI が変更を見分ける方法は未確定。
+- Web UI は、読んだファイルの版を書き込みのときに渡し、ロックの下で照合する（下の「Web UI の変更の見分け方」）。
 
 ### Web UI の画面（2026-11-23 ユーザー判断）
 
@@ -288,6 +288,45 @@ CLI（エージェント）と Web UI とエディタが、同じファイルを
 
 - 既定で開く見方は、キューの一覧（案）。優先順位を決めるのが Worqueue の中心なので。
 - かんばんの列の中での上下の移動を、キューの並び順にどう反映するか、依存関係の図を何で描くかは未確定。
+- 今あるのはキューの一覧だけ（2026-11-25 決定。Issue #12）。早く触って使い勝手を確かめるため、未決のことが残るかんばんと依存関係の図、判定のコードが無い指摘（と指摘の件数）は後で足す。見方の切り替えもまだ無い。
+
+### Web UI のキューの一覧（2026-11-25 決定）
+
+- 上の帯：`Worqueue`、キューの件数、管理と実装の比率（`管理 <n>（<p>%） / 実装 <m>（<q>%）`。`p`・`q` は四捨五入した整数。空なら `管理 0 / 実装 0`）、エラーの帯。
+- 追加のフォーム：タイトル・種別（既定 `implement`）・担当（既定 `me`）・期限。`wq add` は `--kind` を必須にしているが、画面の選択には初期値が要るため。
+- 表：`#`・`ID`・タイトル・状態・種別・担当・期限。行をドラッグして別の行に落とすと動く。落とした行の上半分ならその行の前、下半分ならその次の行の前（最後の行なら末尾）。行き先が今の位置と同じなら何も送らない。ドラッグでの並べ替えは理由を書かない。
+- 行をクリックすると、横に詳細を開く：項目の編集（開いたときから変わった項目だけを送る。依存先は `,` 区切りの ID）、履歴（`## 履歴` の行より後を、前後の空行を除いてそのまま）、履歴の追記、完了（理由は任意）。
+- 詳細の読み込みは、開くたび・閉じるたびに世代を進め、古い世代の応答は捨てる。1 → 2 と続けて開いたときに 1 の遅い応答で 2 の入力が消えたり、閉じた後に開き直したりしないようにするため。
+- 書き込みが成功したら、一覧と詳細を読み直す（入力中の値は捨てる）。エラーはエラーの帯に出し、409 のときは読み直す。画面の自動の更新（ポーリングなど）はしない。ファイルの変化は書き込みのときの 409 で知らせる。
+
+### Web UI の変更の見分け方（2026-11-25 決定）
+
+- ファイルの版は、中身のバイト列の SHA-256（ファイルが無ければ `"none"`。`store/versions.py` の `file_version`）。
+  - 理由：mtime は粒度と、エディタの書き戻しで見逃しうる。中身を比べれば、エディタでの変更も確実に見分けられる。
+- 画面は読んだときの版を持ち、書き込みで渡す。`edit_task`・`log_task`・`done_task`・`move_task` はキーワード引数 `expected`（`FileVersion` の並び）を受け取り、ロックを取った直後、読む前に照合する。違えば何も書かずに `StaleError`（`WorqueueError` の子）：`<data/ からの相対パス> は画面を読み込んだ後に変わりました。読み込み直してください`。CLI は渡さない。
+- 照合するファイル：編集・追記・完了はそのタスクのファイル。並べ替えは `queue.md` だけ。
+  - 理由：並べ替えは行き先を位置ではなく `before`（行の ID）で指すので、他のタスクの状態が変わっても狙った行の前に入る。行き先が `done` になっていれば `move_task` のエラーになる。他のタスクを編集するたびに並べ替えが 409 にならないようにするため。
+- 読む API は、版を先に読み、それから中身を読む。間で変わっても版が古くなるだけ（409 になるだけで、上書きはしない）。
+
+### Web UI の API（2026-11-25 決定）
+
+`web/app.py`。どれも JSON を返し、書き込みは `store/ops.py` の操作を通す（1 回 1 コミット）。
+
+| メソッドとパス | 本体 | 成功の応答 |
+| --- | --- | --- |
+| `GET /api/queue` | — | `{"tasks": [<タスクの JSON>, ...], "version": <queue.md の版>}` |
+| `GET /api/tasks/{id}` | — | `{"task": <wq show --json の task>, "body": <本文>, "version": <タスクのファイルの版>}` |
+| `POST /api/tasks` | `title`・`kind`（必須）、`assignee`・`due`・`depends_on`・`status`・`body` | 201 `{"task": ...}` |
+| `PATCH /api/tasks/{id}` | `version`（必須）、`title`・`status`・`kind`・`assignee`・`due`・`depends_on`・`body`・`reason` | `{"task": ..., "changed": [...]}` |
+| `POST /api/tasks/{id}/log` | `version`・`content` | `{"task": ...}` |
+| `POST /api/tasks/{id}/done` | `version`、`reason` | `{"task": ...}`（`position` は `null`） |
+| `POST /api/tasks/{id}/move` | `version`（`queue.md` の版）・`before`（ID か `null`＝末尾。必須） | `{"task": ..., "from": <from>}` |
+
+- 応答の形は、対応する CLI の `--json` と同じ。
+- 本体は pydantic（`web/bodies.py`）。未知のキーは 422。`PATCH` で省いた項目は変えない。`due: null` は期限を消す。それ以外の項目の `null` は 422。
+- `PATCH` の `depends_on` は依存先の全体。`TaskEdit.depends_on` として渡し、`edit_task` がロックの下で版を照合した後に読んだファイルの依存先との差を、外す ID と足す ID にする（残る ID は今の順のまま、足す ID は指定の順で後ろに続く）。確かめるのは足す ID だけ。今からある依存先を確かめ直さないという `wq edit` の決まりを保つため。サーバーが照合の前にファイルを読まないので、画面を開いた後にファイルが消えたり壊れたりしても 409 になる。
+- エラーは `{"error": "<メッセージ>"}`。`StaleError` は 409、その他の `WorqueueError`（タスクが無いときも）は 400。本体の型の誤りは FastAPI の既定の 422。
+- 守り（`web/guard.py`）：`Host` の名前が `127.0.0.1` か `localhost` でなければ 403（DNS rebinding を防ぐ）。GET・HEAD 以外で `Content-Type` が `application/json` でなければ 415（他のサイトのページからの書き込みはプリフライトが要るようになり、CORS を許さないので通らない）。トークンでの認証は持たない（自分専用の PC で使うため。ddviz のトークンは共有の RDP サーバーのため）。
 
 ### CLI のコマンド（2026-11-23 ユーザー判断）
 
@@ -307,7 +346,7 @@ CLI（エージェント）と Web UI とエディタが、同じファイルを
 | `wq done <ID>` | `done` にしてキューから外す |
 | `wq suggest` | 並べ替えの指摘を表示する |
 | `wq config get` / `set` | 設定（`data/config.toml`）を読む・書く |
-| `wq serve` | Web UI のサーバーを立てる |
+| `wq serve` | Web UI のサーバーを立てる（下の「`wq serve`」） |
 
 - 上のコマンドの一覧は案で、オプションの名前と細部は実装のときに決めて、ここに書く。
 - すべてのコマンドで `--json` を付けると JSON を出す。人向けの表示とエージェント向けの出力を同じコマンドで賄う。JSON の形はエージェントが頼るので、変えるときは spec に書く。
@@ -512,6 +551,19 @@ CLI（エージェント）と Web UI とエディタが、同じファイルを
 - JSON（どちらのときも）：`{"task": <タスクの JSON>, "changed": [<変えた項目の名前>, ...]}`。名前は上の順の `title`・`status`・`kind`・`assignee`・`due`・`depends_on`・`body`。変えなかったときは `[]`。前の値は履歴とコミットに残るので入れない。
 - `store/ops.py` の `edit_task(data, task_id, edit: TaskEdit, reason, now, lock_timeout)` は `EditResult`（`task`・`position`・`changed`・`description`（変更の文））を返す。`TaskEdit` は変える値（`due` と `clear_due`、`remove_depends_on` と `clear_depends_on` の両方は `ValueError`）。
 
+### `wq serve`（2026-11-25 決定）
+
+| 引数 | 内容 |
+| --- | --- |
+| `--port <番号>` | 待ち受けるポート。既定 `8765` |
+| `--no-browser` | ブラウザを開かない。既定では、待ち受けを始める直前に `webbrowser.open` で開く |
+| `--json` | 起動時に `{"url": "http://127.0.0.1:<port>/"}` を出す |
+
+- `127.0.0.1` だけで待ち受ける（uvicorn）。人向けの出力は `Worqueue: http://127.0.0.1:<port>/ （Ctrl+C で止める）`。Ctrl+C で止まり、終了コード 0。
+- ポートが使われているなどで待ち受けられなければ、uvicorn のエラーのまま終了コード 1。
+- ポートは設定ファイルに置かない。今は引数で足りるため（上の「設定」）。
+- 書き込みの時刻は `cli/clock.py` の `now`（`web` は `cli` を import しないので、`create_app` に渡す）。
+
 ### タスクの JSON（2026-11-24 ユーザー判断）
 
 ```json
@@ -540,9 +592,12 @@ GitHub Actions のワークフロー `.github/workflows/ci.yml`（ワークフ�
 - 契機：すべての `pull_request` と、`main` への `push` だけ。PR ごとの確認と、マージ後の `main` の確認の両方が要るため。他のブランチへの push だけでは走らせない。
 - 同じ PR（`main` では同じブランチ）の古い実行は `concurrency`（`group: ci-${{ github.event.pull_request.number || github.ref }}`、`cancel-in-progress: true`）で取り消す。レビューの修正で続けて push しても、最後の head の結果だけを待てばよいため。
 - `runs-on: windows-latest` だけで走らせる。ユーザーは Windows で使い、テストは Windows のファイルロックと git for Windows の動きを前提にしているため。ubuntu でだけ壊れる変更は見落とすが、ユーザーの使い方では問題にならないので受け入れる。
-- 手順：`actions/checkout` → `astral-sh/setup-uv`（`enable-cache: true`）→ `uv sync --locked` → `uv run -m ruff check .` → `uv run -m ty check` → `uv run -m pytest --tb=short -q`。`timeout-minutes: 15`、`permissions: contents: read`。
+- 手順：`actions/checkout` → `astral-sh/setup-uv`（`enable-cache: true`）→ `uv sync --locked` → `uv run -m ruff check .` → `uv run -m ty check` → `uv run -m pytest --tb=short -q` → `uv run -m pytest -m e2e --tb=short -q`。`timeout-minutes: 15`、`permissions: contents: read`。
   - Python は `uv sync --locked` に任せ、`.python-version` の 3.13 を uv が入れる（`actions/setup-python` は使わない）。`--locked` なので、`uv.lock` が `pyproject.toml` と合っていなければ失敗する。
   - git の設定（`user.name` など）は足さない。テストは `tests/conftest.py` の autouse の fixture で、`WORQUEUE_DATA` を一時ディレクトリにし、git をユーザーの設定から切り離し、コミットする人を環境変数で渡すため。`data/` はチェックアウトに無く、`.githooks` も有効にしない。
+- E2E（2026-11-25 決定）：`tests/e2e`（マーカー `e2e`）が Playwright と、入っている Chrome（`--browser-channel chrome`）で Web UI を操作する。`pyproject.toml` の `addopts` の `-m "not e2e"` で既定の `uv run -m pytest` からは外し、`-m e2e` で走らせる。windows-latest には Chrome が入っている。
+  - 理由：エージェントが画面の動きを自分で確かめられる（ddviz と同じ道具）。既定から外すのは、Chrome の無い環境でも既定のテストを走らせられるようにするため。
+  - ドラッグは Playwright の `drag_to` の合成のマウス操作で、OS のドラッグそのものは通らない。
 - 型検査は ty（`uv run -m ty check`。2026-11-25 決定）。設定は足さず、既定（`src/` と `tests/` のすべて、`pyproject.toml` の `requires-python`）で検査する。
   - 理由：型ヒントはすべての関数に付ける決まり（`.agents/docs/python.md`）なので、その誤りを PR ごとに見つける。ruff と同じ Astral の道具で、`uv run -m` でそろえて走らせられる。
   - ty の版は dev の依存で固定する（`ty==<版>`、`uv.lock` に入る）。ty はまだ 0.0.x のベータで、版が上がるたびに新しい検査が増えて CI が落ちうるため。版は、指摘を直す手間と一緒に、手で上げる。uv の版を固定しないのと違うのは、uv の更新ではこのリポジトリのコードへの指摘が増えないため。
@@ -570,8 +625,9 @@ src/worqueue/
     edit.py        wq edit
     args.py        コマンドの間で共有する引数の型（日付）
     table.py       人向けの表（東アジアの文字幅）
+    serve.py       wq serve
   store/           データの層。cli を import しない
-    errors.py      WorqueueError（CLI が終了コード 1 にするエラー）
+    errors.py      WorqueueError（CLI が終了コード 1 にするエラー）、StaleError
     paths.py       data/ の場所（WORQUEUE_DATA）
     atomic.py      一時ファイル + os.replace での書き込み
     task.py        タスクの型、タスクのファイルの読み書き
@@ -581,14 +637,24 @@ src/worqueue/
     lock.py        ロック（filelock）
     repo.py        git の確認・init・コミット
     ops.py         操作（add、list、show、move、done、log、edit）：ロック → 読む → 書く → コミット
+    versions.py    ファイルの版（Web UI の変更の見分け）
+  web/             Web UI のサーバー（FastAPI）。store を使い、cli を import しない
+    app.py         create_app：ルート、静的ファイル、エラーの応答
+    bodies.py      API のリクエストの本体（pydantic）
+    guard.py       Host と Content-Type を確かめるミドルウェア
+    static/        index.html、app.css、js/（素の ES モジュール。ビルド工程・npm・CDN なし）
+      js/app.js    画面の組み立て、書き込みのエラーと読み直し
+      js/api.js    fetch の呼び出しとエラー
+      js/queue.js  キューの一覧、比率、ドラッグでの並べ替え
+      js/detail.js 詳細パネル（編集・追記・完了）
+      js/addform.js 追加のフォーム
 ```
 
-- `store` は `cli` を import しない。`tests/test_layers.py` が、`store` のソースの import 文（`ast`）でこの向きを確かめる。
-- 理由：あとで足す Web UI のサーバーも `store` だけを使えば、CLI と同じ読み書きの処理を共有できる（上の「技術スタック」）。
+- `store` と `web` は `cli` を import しない。`tests/test_layers.py` が、ソースの import 文（`ast`）でこの向きを確かめる。
+- 理由：Web UI のサーバーも `store` だけを使えば、CLI と同じ読み書きの処理を共有できる（上の「技術スタック」）。
 - 新しいコマンドは `cli/` に 1 コマンド 1 モジュールで足し、データの読み書きは `store/ops.py` の操作にする。
 
 ## 未決事項
 
-- `wq suggest`・`wq config`・`wq serve` のオプションの名前と JSON の形、コミットのメッセージの内容
-- Web UI が、画面を開いたあとのファイルの変更を見分ける方法
+- `wq suggest`・`wq config` のオプションの名前と JSON の形、コミットのメッセージの内容
 - かんばんでの上下の移動とキューの並び順の関係、依存関係の図の描き方
