@@ -33,10 +33,12 @@ export function dropAction(board, draggedId, status, place) {
   return status === DONE ? { kind: "done" } : { kind: "status", status };
 }
 
-// Wires the board's columns once and returns {render(board)}, where `board` is {tasks, done, doneTotal}.
-// `onOpen(id)` runs on a click of a card not done, `onDrop(id, action)` on a drop that writes (see dropAction).
+// Wires the board's columns once and returns {render(board)}. `board` is what was read for one drawing:
+// {tasks, done, doneTotal, queueVersion, taskVersions}. `onOpen(id)` runs on a click of a card not done,
+// `onDrop(id, action, board)` on a drop that writes (see dropAction), with the board drawn when it was dropped,
+// so the write carries the versions of the files as the cards show them.
 export function createBoard(root, { onOpen, onDrop }) {
-  let current = { tasks: [], done: [], doneTotal: 0 };
+  let current = { tasks: [], done: [], doneTotal: 0, queueVersion: "none", taskVersions: {} };
   const columns = [...root.querySelectorAll(".column")];
 
   for (const column of columns) {
@@ -53,7 +55,7 @@ export function createBoard(root, { onOpen, onDrop }) {
       clearDropLine(column);
       const dragged = Number(event.dataTransfer.getData("text/plain"));
       const action = dropAction(current, dragged, status, placeOf(column, event));
-      if (action !== null) onDrop(dragged, action);
+      if (action !== null) onDrop(dragged, action, current);
     });
   }
 

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import Locator, Page, Position, expect
+from playwright.sync_api import Locator, Page, Position, Route, expect
 
 from worqueue.store.ops import NewTask, TaskEdit, add_task, edit_task
 from worqueue.store.queue import read_queue
@@ -151,3 +151,29 @@ def test_the_view_is_kept_in_the_hash_and_a_card_opens_the_detail(
     page.click("#view-list")
     expect(page.locator("#list")).to_be_visible()
     expect(page.locator("#board")).to_be_hidden()
+
+
+def test_a_drop_on_a_board_being_read_again_uses_the_versions_of_the_cards_shown(
+    page: Page, server: str, data: Path, now: datetime
+) -> None:
+    """While the board is read again, a drop on its old cards carries their versions, not those read later."""
+    add(data, now, "todo")
+    open_board(page, server)
+    edit_task(data, 1, TaskEdit(status="waiting"), None, now)
+    after = (data / "tasks" / "1.md").read_bytes()
+    page.click("#view-list")  # reads the queue again, with the new version of task 1
+    expect(page.locator("#queue tr").first).to_contain_text("waiting")
+    held: list[Route] = []
+    page.route("**/api/queue", lambda route: held.append(route))
+
+    page.click("#view-board")
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(50)
+    assert held, "the board's read of the queue was not held"
+    card(page, "todo", 1).drag_to(column(page, "doing"))
+
+    expect(page.locator("#error")).to_contain_text("変わりました")
+    assert (data / "tasks" / "1.md").read_bytes() == after
+    page.unroute("**/api/queue")  # lets the held reads go on

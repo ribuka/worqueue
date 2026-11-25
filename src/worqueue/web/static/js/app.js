@@ -23,9 +23,10 @@ function showError(message) {
 async function loadQueue() {
   const { tasks, version, task_versions } = await getQueue();
   queue = { tasks, version, taskVersions: task_versions };
+  // The rows and the version they are moved with come from the same read.
   renderQueue(document.getElementById("queue"), tasks, {
     onOpen: openDetail,
-    onMove: (id, before) => run(() => moveTask(id, queue.version, before)),
+    onMove: (id, before) => run(() => moveTask(id, version, before)),
   });
   document.getElementById("queue-empty").hidden = tasks.length > 0;
   document.getElementById("count").textContent = `${tasks.length} 件`;
@@ -45,7 +46,13 @@ async function loadView() {
     return;
   }
   await Promise.all([loadQueue(), loadDone()]);
-  board.render({ tasks: queue.tasks, done: done.tasks, doneTotal: done.total });
+  board.render({
+    tasks: queue.tasks,
+    done: done.tasks,
+    doneTotal: done.total,
+    queueVersion: queue.version,
+    taskVersions: { ...done.taskVersions, ...queue.taskVersions },
+  });
 }
 
 // Reads the current view and the open task again.
@@ -70,16 +77,14 @@ function openDetail(id) {
   detail.open(id).catch((error) => showError(error.message));
 }
 
-// Returns the version of a task's file as the board read it ("none" if it was not read, which the server refuses).
-function taskVersion(id) {
-  return queue.taskVersions[id] ?? done.taskVersions[id] ?? "none";
-}
-
-// Runs the write of a drop on the board.
-function writeDrop(id, action) {
-  if (action.kind === "move") return run(() => moveTask(id, queue.version, action.before));
-  if (action.kind === "done") return run(() => doneTask(id, taskVersion(id), ""));
-  return run(() => editTask(id, { version: taskVersion(id), status: action.status }));
+// Runs the write of a drop on the board, with the versions of the board as drawn (`drawn`): never those of a
+// later read, which could match a file changed after the cards were drawn. A task without a version is sent
+// as "none", which the server refuses.
+function writeDrop(id, action, drawn) {
+  if (action.kind === "move") return run(() => moveTask(id, drawn.queueVersion, action.before));
+  const version = drawn.taskVersions[id] ?? "none";
+  if (action.kind === "done") return run(() => doneTask(id, version, ""));
+  return run(() => editTask(id, { version, status: action.status }));
 }
 
 // Shows the view the URL's hash names (the board for #kanban, the list otherwise) and reads it.
