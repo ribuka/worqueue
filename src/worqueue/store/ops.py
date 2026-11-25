@@ -1,4 +1,4 @@
-"""Operations on data/ (add, list, show, log, done, move, edit): lock, read, write, and commit as one step."""
+"""Operations on data/ (add, list, list_done, show, log, done, move, edit): lock, read, write, and commit as one step."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -22,6 +22,7 @@ from worqueue.store.task import (
     initial_markdown,
     read_task,
     replace_body,
+    task_ids,
     task_path,
     write_task,
 )
@@ -144,6 +145,30 @@ def list_queue(data: Path) -> list[Task]:
         If ``queue.md`` or a task file in it is malformed or missing.
     """
     return _shown_tasks(data, read_queue(data))
+
+
+def list_done(data: Path) -> list[Task]:
+    """Return the ``done`` tasks, the largest ID first.
+
+    Reads only: takes no lock and creates nothing.
+
+    Parameters
+    ----------
+    data : Path
+        The data/ directory. It may not exist.
+
+    Returns
+    -------
+    list of Task
+        Every task in ``tasks/`` whose status is ``done``, in or out of the queue.
+
+    Raises
+    ------
+    WorqueueError
+        If a task file (of any status) is malformed.
+    """
+    tasks = [read_task(data, task_id) for task_id in sorted(task_ids(data), reverse=True)]
+    return [task for task in tasks if task.status == "done"]
 
 
 def show_task(data: Path, task_id: int) -> tuple[Task, int | None]:

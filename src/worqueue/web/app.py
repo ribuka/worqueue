@@ -19,18 +19,21 @@ from worqueue.store.ops import (
     add_task,
     done_task,
     edit_task,
+    list_done,
     list_queue,
     log_task,
     move_task,
     show_task,
 )
-from worqueue.store.queue import QUEUE_FILE
-from worqueue.store.task import body_of, task_path
-from worqueue.store.versions import FileVersion, file_version
+from worqueue.store.queue import QUEUE_FILE, read_queue
+from worqueue.store.task import body_of, task_ids, task_path
+from worqueue.store.versions import MISSING_VERSION, FileVersion, file_version
 from worqueue.web.bodies import DoneBody, EditBody, LogBody, MoveBody, NewTaskBody
 from worqueue.web.guard import RequestGuard
 
 STATIC = Path(__file__).parent / "static"
+# How many done tasks ``GET /api/done`` returns, the largest ID first.
+DONE_SHOWN = 20
 
 
 def create_app(data: Path, now: Callable[[], datetime]) -> FastAPI:
@@ -65,14 +68,30 @@ def create_app(data: Path, now: Callable[[], datetime]) -> FastAPI:
 
 
 def _add_read_routes(app: FastAPI, data: Path) -> None:
-    """Add the routes that read: the queue and one task."""
+    """Add the routes that read: the queue, the done tasks, and one task."""
+    # Versions are read before the content: a change in between makes them stale, never newer.
 
     @app.get("/api/queue")
     def queue() -> dict:
-        # The version is read first: a change in between makes it stale, never newer.
         version = file_version(data / QUEUE_FILE)
+        versions = _task_versions(data, read_queue(data))
         tasks = list_queue(data)
-        return {"tasks": [task.summary(i) for i, task in enumerate(tasks, start=1)], "version": version}
+        return {
+            "tasks": [task.summary(i) for i, task in enumerate(tasks, start=1)],
+            "version": version,
+            "task_versions": {str(task.id): versions.get(task.id, MISSING_VERSION) for task in tasks},
+        }
+
+    @app.get("/api/done")
+    def done() -> dict:
+        versions = _task_versions(data, task_ids(data))
+        tasks = list_done(data)
+        shown = tasks[:DONE_SHOWN]
+        return {
+            "tasks": [task.summary(None) for task in shown],
+            "total": len(tasks),
+            "task_versions": {str(task.id): versions.get(task.id, MISSING_VERSION) for task in shown},
+        }
 
     @app.get("/api/tasks/{task_id}")
     def task(task_id: int) -> dict:
@@ -118,6 +137,11 @@ def _add_write_routes(app: FastAPI, data: Path, now: Callable[[], datetime]) -> 
         expected = (FileVersion(data / QUEUE_FILE, body.version),)
         moved, start, end = move_task(data, task_id, target, None, now(), expected=expected)
         return {"task": moved.summary(end), "from": start}
+
+
+def _task_versions(data: Path, ids: list[int]) -> dict[int, str]:
+    """Return the version of each task file of ``ids``."""
+    return {task_id: file_version(task_path(data, task_id)) for task_id in ids}
 
 
 def _error_response(status_code: int) -> Callable[[Request, Exception], JSONResponse]:

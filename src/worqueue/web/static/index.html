@@ -14,6 +14,10 @@
     <span id="count" class="muted"></span>
     <span id="ratio"></span>
   </header>
+  <nav class="views" aria-label="見方">
+    <button id="view-list" type="button" aria-pressed="true">一覧</button>
+    <button id="view-board" type="button" aria-pressed="false">かんばん</button>
+  </nav>
   <div id="error" class="error" role="alert" hidden></div>
 
   <form id="add-form" class="add-form">
@@ -28,7 +32,7 @@
   </form>
 
   <main class="layout">
-    <section class="queue-pane">
+    <section id="list" class="queue-pane">
       <table class="queue">
         <thead>
           <tr><th>#</th><th>ID</th><th>タイトル</th><th>状態</th><th>種別</th><th>担当</th><th>期限</th></tr>
@@ -36,6 +40,13 @@
         <tbody id="queue"></tbody>
       </table>
       <p id="queue-empty" class="muted" hidden>キューは空です</p>
+    </section>
+
+    <section id="board" class="board" hidden>
+      <div class="column" data-status="todo"><h2>todo <span class="column-count"></span></h2><div class="cards"></div></div>
+      <div class="column" data-status="doing"><h2>doing <span class="column-count"></span></h2><div class="cards"></div></div>
+      <div class="column" data-status="waiting"><h2>waiting <span class="column-count"></span></h2><div class="cards"></div></div>
+      <div class="column" data-status="done"><h2>done <span class="column-count"></span></h2><div class="cards"></div><p class="more muted" hidden></p></div>
     </section>
 
     <aside id="detail" class="detail" hidden>
