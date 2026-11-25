@@ -1,5 +1,6 @@
 """The task type and reading and writing task files (``tasks/<ID>.md``)."""
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -18,6 +19,8 @@ MY_ASSIGNEE = "me"
 HISTORY_HEADING = "## 履歴"
 FIELD_NAMES = ("title", "status", "kind", "assignee", "due", "depends_on", "created")
 FRONT_MATTER_FENCE = "---"
+# A history entry's date; the time and the rest are free, so that lines written by hand count.
+_HISTORY_DATE = re.compile(r"^- ([0-9]{4}-[0-9]{2}-[0-9]{2})(?:\s|$)")
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,36 @@ def append_history(markdown: str, line: str) -> str:
     if not stripped:
         return f"\n{HISTORY_HEADING}\n\n{line}\n"
     return f"{stripped}\n\n{HISTORY_HEADING}\n\n{line}\n"
+
+
+def history_dates(markdown: str) -> list[date]:
+    """Return the dates of the history entries.
+
+    Parameters
+    ----------
+    markdown : str
+        The Markdown after the front matter (body and history).
+
+    Returns
+    -------
+    list of date
+        The date of each line after the first history heading line that starts with
+        ``- <YYYY-MM-DD>``, in the order of the lines. Other lines, and dates that
+        do not exist, are skipped. Empty without a history heading line.
+    """
+    _, history = _split_history(markdown)
+    if history is None:
+        return []
+    dates: list[date] = []
+    for line in history.split("\n"):
+        match = _HISTORY_DATE.match(line)
+        if match is None:
+            continue
+        try:
+            dates.append(date.fromisoformat(match.group(1)))
+        except ValueError:
+            continue
+    return dates
 
 
 def body_of(markdown: str) -> str:

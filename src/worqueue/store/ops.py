@@ -1,4 +1,7 @@
-"""Operations on data/ (add, list, list_done, show, log, done, move, edit): lock, read, write, and commit as one step."""
+"""Operations on data/ (add, list, list_done, show, suggest, log, done, move, edit).
+
+Writing ones lock, read, write, and commit as one step.
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -6,11 +9,13 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
+from worqueue.store.config import load_config
 from worqueue.store.errors import WorqueueError
 from worqueue.store.ids import next_id, write_next_id
 from worqueue.store.lock import LOCK_TIMEOUT_SECONDS, write_lock
 from worqueue.store.queue import read_queue, write_queue
 from worqueue.store.repo import check_git, commit, ensure_repo
+from worqueue.store.suggest import Suggestion, judge_queue
 from worqueue.store.task import (
     HISTORY_HEADING,
     KINDS,
@@ -198,6 +203,44 @@ def show_task(data: Path, task_id: int) -> tuple[Task, int | None]:
     """
     task = _existing_task(data, task_id)
     return task, _position(_shown_ids(data, read_queue(data)), task_id)
+
+
+def suggest_queue(data: Path, now: datetime) -> list[Suggestion]:
+    """Return the tasks of the queue that should perhaps move up, with the reasons.
+
+    Reads only: takes no lock and creates nothing.
+
+    Parameters
+    ----------
+    data : Path
+        The data/ directory. It may not exist.
+    now : datetime
+        Current time; its local date is today.
+
+    Returns
+    -------
+    list of Suggestion
+        One per task with at least one reason, in queue order.
+
+    Raises
+    ------
+    WorqueueError
+        If ``config.toml``, ``queue.md``, a task file in the queue, or the file of a
+        dependency is malformed, or a task file in the queue is missing.
+    """
+    config = load_config(data).suggest
+    tasks = list_queue(data)
+    return judge_queue(tasks, _done_dependencies(data, tasks), config, now.astimezone().date())
+
+
+def _done_dependencies(data: Path, tasks: list[Task]) -> set[int]:
+    """Return the IDs of the ``done`` tasks that ``tasks`` depend on.
+
+    ``tasks`` hold no ``done`` task, so their own files are not read again. A
+    dependency without a file is not known to be ``done``.
+    """
+    others = {i for task in tasks for i in task.depends_on} - {task.id for task in tasks}
+    return {i for i in sorted(others) if task_path(data, i).is_file() and read_task(data, i).status == "done"}
 
 
 def log_task(
