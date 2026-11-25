@@ -144,8 +144,21 @@ def test_edit_without_a_field_to_change_is_a_usage_error(
         ([], ["--assignee", "佐藤\n鈴木"], "担当に改行は入れられません"),
         ([], ["--status", "doing", "--reason", ""], "理由が空です"),
         ([], ["--body", "本文\n## 履歴\n- 偽の履歴"], "本文に「## 履歴」の行は入れられません"),
+        ([], ["--body", "本文\r\n## 履歴\r\n- 偽の履歴"], "本文に「## 履歴」の行は入れられません"),
+        ([], ["--body", "本文\r## 履歴\r- 偽の履歴"], "本文に「## 履歴」の行は入れられません"),
     ],
-    ids=["self", "missing", "cycle", "add-and-remove", "empty-title", "assignee-newline", "empty-reason", "body-heading"],
+    ids=[
+        "self",
+        "missing",
+        "cycle",
+        "add-and-remove",
+        "empty-title",
+        "assignee-newline",
+        "empty-reason",
+        "body-heading",
+        "body-heading-crlf",
+        "body-heading-cr",
+    ],
 )
 def test_edit_rejects_bad_values_without_writing(
     wq: Callable, tasks: None, data: Path, git: Git, prepare: list[list[str]], args: list[str], message: str
@@ -240,6 +253,16 @@ def test_edit_body_replaces_only_the_body(wq: Callable, tasks: None, data: Path,
     text = (data / "tasks" / "2.md").read_text(encoding="utf-8")
     assert text.split("---\n", 2)[2] == (
         f"\n新しい本文\n\n2 段落目\n\n## 履歴\n\n- {stamp(now)} 作成\n- {stamp(now)} 相談した\n- {stamp(now)} 本文を変更\n"
+    )
+
+
+def test_edit_body_writes_lf_line_ends(wq: Callable, tasks: None, data: Path, now: datetime) -> None:
+    """A body with CRLF or CR line ends is written with LF."""
+    wq("edit", "2", "--body", "1 行目\r\n2 行目\r3 行目")
+
+    text = (data / "tasks" / "2.md").read_bytes().decode("utf-8")
+    assert text.split("---\n", 2)[2] == (
+        f"\n1 行目\n2 行目\n3 行目\n\n## 履歴\n\n- {stamp(now)} 作成\n- {stamp(now)} 本文を変更\n"
     )
 
 

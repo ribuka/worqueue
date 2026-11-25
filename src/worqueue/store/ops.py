@@ -530,10 +530,15 @@ def edit_task(
 
 
 def _checked_body(body: str | None) -> str | None:
-    """Return ``body`` stripped, or raise if it has a history heading line."""
+    """Return ``body`` with LF line ends and stripped, or raise if it has a history heading line.
+
+    CRLF and CR become LF first: files are written with LF and read with universal
+    newlines, so a heading ending with CR would otherwise pass here and split the
+    body when the file is read again.
+    """
     if body is None:
         return None
-    stripped = body.strip()
+    stripped = body.replace("\r\n", "\n").replace("\r", "\n").strip()
     if HISTORY_HEADING in stripped.split("\n"):
         raise WorqueueError(f"本文に「{HISTORY_HEADING}」の行は入れられません")
     return stripped
