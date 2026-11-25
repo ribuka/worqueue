@@ -1,4 +1,4 @@
-"""Operations on data/ (add, list, show, log, done, move): lock, read, write, and commit as one step."""
+"""Operations on data/ (add, list, show, log, done, move, edit): lock, read, write, and commit as one step."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -12,13 +12,16 @@ from worqueue.store.lock import LOCK_TIMEOUT_SECONDS, write_lock
 from worqueue.store.queue import read_queue, write_queue
 from worqueue.store.repo import check_git, commit, ensure_repo
 from worqueue.store.task import (
+    HISTORY_HEADING,
     KINDS,
-    STATUSES,
+    OPEN_STATUSES,
     Task,
     append_history,
+    body_of,
     history_line,
     initial_markdown,
     read_task,
+    replace_body,
     task_path,
     write_task,
 )
@@ -86,7 +89,7 @@ def add_task(
     assignee = _one_line("担当", new.assignee)
     if new.kind not in KINDS:
         raise WorqueueError(f"種別は {', '.join(KINDS)} のどれかにしてください: {new.kind}")
-    if new.status not in STATUSES or new.status == "done":
+    if new.status not in OPEN_STATUSES:
         raise WorqueueError(f"作るタスクの状態は todo, doing, waiting のどれかにしてください: {new.status}")
     def prepare() -> tuple[tuple[Task, int], _Change]:
         depends_on = tuple(dict.fromkeys(new.depends_on))
@@ -369,6 +372,273 @@ def _target_index(data: Path, task_id: int, target: MoveTarget, shown: list[int]
     return others.index(value) + (1 if target.where == "after" else 0)
 
 
+@dataclass(frozen=True)
+class TaskEdit:
+    """What ``edit_task`` changes. Fields left at their defaults keep the task's value.
+
+    Attributes
+    ----------
+    title : str or None
+        New title. Surrounding whitespace is removed.
+    status : str or None
+        New status, one of ``OPEN_STATUSES`` (``wq done`` makes a task ``done``).
+    kind : str or None
+        New kind, one of ``KINDS``.
+    assignee : str or None
+        New assignee. Surrounding whitespace is removed.
+    due : date or None
+        New due date.
+    clear_due : bool
+        Remove the due date. Not with ``due``.
+    add_depends_on : tuple of int
+        IDs to add to the end of the dependencies, in order, unless already there.
+    remove_depends_on : tuple of int
+        IDs to take out of the dependencies. Not with ``clear_depends_on``.
+    clear_depends_on : bool
+        Start the dependencies from none (then ``add_depends_on`` replaces them).
+    body : str or None
+        New body, replacing the Markdown before the history. Surrounding whitespace
+        is removed; empty for none.
+    """
+
+    title: str | None = None
+    status: str | None = None
+    kind: str | None = None
+    assignee: str | None = None
+    due: date | None = None
+    clear_due: bool = False
+    add_depends_on: tuple[int, ...] = ()
+    remove_depends_on: tuple[int, ...] = ()
+    clear_depends_on: bool = False
+    body: str | None = None
+
+
+EDIT_FIELDS = ("title", "status", "kind", "assignee", "due", "depends_on", "body")
+
+
+@dataclass(frozen=True)
+class EditResult:
+    """What ``edit_task`` did.
+
+    Attributes
+    ----------
+    task : Task
+        The task after the edit.
+    position : int or None
+        Its position, as ``show_task`` returns.
+    changed : tuple of str
+        Names of the changed fields in the order of ``EDIT_FIELDS``. Empty when
+        nothing changed.
+    description : str
+        How the fields changed, as written in the history (without the reason) and
+        the commit message. Empty when nothing changed.
+    """
+
+    task: Task
+    position: int | None
+    changed: tuple[str, ...]
+    description: str
+_FIELD_LABELS = {
+    "title": "タイトル",
+    "status": "状態",
+    "kind": "種別",
+    "assignee": "担当",
+    "due": "期限",
+    "depends_on": "依存先",
+}
+
+
+def edit_task(
+    data: Path,
+    task_id: int,
+    edit: TaskEdit,
+    reason: str | None,
+    now: datetime,
+    lock_timeout: float = LOCK_TIMEOUT_SECONDS,
+) -> EditResult:
+    """Change a task's fields or body, write what changed in its history, and commit it.
+
+    Changing nothing (every new value equals the current one) writes and commits
+    nothing. Changing a ``done`` task to another status appends it to the queue
+    unless ``queue.md`` already has it.
+
+    Parameters
+    ----------
+    data : Path
+        The data/ directory.
+    task_id : int
+        Task ID. A ``done`` task, or one out of the queue, is accepted.
+    edit : TaskEdit
+        What to change.
+    reason : str or None
+        Why, written at the end of the history entry when something changes.
+        Surrounding whitespace is removed.
+    now : datetime
+        Time of the history entry.
+    lock_timeout : float
+        Seconds to wait for the write lock.
+
+    Returns
+    -------
+    EditResult
+        The task after the edit, its position, the changed fields, and how they
+        changed.
+
+    Raises
+    ------
+    WorqueueError
+        If a value is invalid, a dependency to add is the task itself, does not
+        exist, or makes a cycle, the task does not exist, data/ is malformed, git is
+        unusable, the lock is not acquired, or the commit fails.
+    ValueError
+        If ``edit`` sets both ``due`` and ``clear_due``, or both
+        ``remove_depends_on`` and ``clear_depends_on``.
+    """
+    edit = replace(
+        edit,
+        title=_optional_one_line("タイトル", edit.title),
+        assignee=_optional_one_line("担当", edit.assignee),
+    )
+    reason = _optional_one_line("理由", reason)
+    edit = replace(edit, body=_checked_body(edit.body))
+    _check_edit_options(edit)
+
+    def prepare() -> tuple[EditResult, _Change | None]:
+        task = _existing_task(data, task_id)
+        _check_new_dependencies(data, task_id, edit.add_depends_on)
+        edited = _edited(task, edit)
+        changed = tuple(name for name in EDIT_FIELDS if _field_value(task, name) != _field_value(edited, name))
+        queue = read_queue(data)
+        if not changed:
+            return EditResult(task, _position(_shown_ids(data, queue, task), task_id), (), ""), None
+        description = "、".join(_describe_change(name, task, edited) for name in changed)
+        edited = _with_history(edited, now, description if reason is None else f"{description}: {reason}")
+        reopened = task.status == "done" and edited.status != "done" and task_id not in queue
+        new_queue = [*queue, task_id] if reopened else queue
+        position = _position(_shown_ids(data, new_queue, edited), task_id)
+
+        def write() -> list[Path]:
+            written = [write_task(data, edited)]
+            if reopened:
+                written.append(write_queue(data, new_queue))
+            return written
+
+        result = EditResult(edited, position, changed, description)
+        return result, _Change(write, f"edit {task_id}: {description}")
+
+    return _write_locked(data, lock_timeout, prepare)
+
+
+def _checked_body(body: str | None) -> str | None:
+    """Return ``body`` with LF line ends and stripped, or raise if it has a history heading line.
+
+    CRLF and CR become LF first: files are written with LF and read with universal
+    newlines, so a heading ending with CR would otherwise pass here and split the
+    body when the file is read again.
+    """
+    if body is None:
+        return None
+    stripped = body.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if HISTORY_HEADING in stripped.split("\n"):
+        raise WorqueueError(f"本文に「{HISTORY_HEADING}」の行は入れられません")
+    return stripped
+
+
+def _check_edit_options(edit: TaskEdit) -> None:
+    """Raise if ``edit`` has an invalid status or kind, or contradicting options."""
+    if edit.due is not None and edit.clear_due:
+        raise ValueError("TaskEdit cannot set both due and clear_due")
+    if edit.remove_depends_on and edit.clear_depends_on:
+        raise ValueError("TaskEdit cannot set both remove_depends_on and clear_depends_on")
+    if edit.status is not None and edit.status not in OPEN_STATUSES:
+        raise WorqueueError(f"状態は {', '.join(OPEN_STATUSES)} のどれかにしてください: {edit.status}")
+    if edit.kind is not None and edit.kind not in KINDS:
+        raise WorqueueError(f"種別は {', '.join(KINDS)} のどれかにしてください: {edit.kind}")
+    for dependency in edit.add_depends_on:
+        if dependency in edit.remove_depends_on:
+            raise WorqueueError(f"タスク {dependency} を依存先に足しつつ外すことはできません")
+
+
+def _check_new_dependencies(data: Path, task_id: int, dependencies: tuple[int, ...]) -> None:
+    """Raise if a dependency to add is the task itself, does not exist, or leads back to the task."""
+    for dependency in dependencies:
+        if dependency == task_id:
+            raise WorqueueError(f"タスク {task_id} は自分自身に依存できません")
+        if not task_path(data, dependency).is_file():
+            raise WorqueueError(f"タスク {dependency} がありません")
+        path = _dependency_path(data, dependency, task_id, set())
+        if path is not None:
+            raise WorqueueError(f"依存が循環します: {' → '.join(str(i) for i in [task_id, *path])}")
+
+
+def _dependency_path(data: Path, start: int, goal: int, seen: set[int]) -> list[int] | None:
+    """Return the IDs from ``start`` to ``goal`` following ``depends_on`` depth first, or None.
+
+    A task without a file is a dead end. ``seen`` holds the tasks already followed.
+    """
+    if start == goal:
+        return [start]
+    if start in seen or not task_path(data, start).is_file():
+        return None
+    seen.add(start)
+    for dependency in read_task(data, start).depends_on:
+        rest = _dependency_path(data, dependency, goal, seen)
+        if rest is not None:
+            return [start, *rest]
+    return None
+
+
+def _edited(task: Task, edit: TaskEdit) -> Task:
+    """Return ``task`` with the values of ``edit``, before the history entry."""
+    markdown = task.markdown
+    if edit.body is not None and edit.body != body_of(markdown):
+        markdown = replace_body(markdown, edit.body)
+    return replace(
+        task,
+        title=task.title if edit.title is None else edit.title,
+        status=task.status if edit.status is None else edit.status,
+        kind=task.kind if edit.kind is None else edit.kind,
+        assignee=task.assignee if edit.assignee is None else edit.assignee,
+        due=None if edit.clear_due else task.due if edit.due is None else edit.due,
+        depends_on=_edited_dependencies(task.depends_on, edit),
+        markdown=markdown,
+    )
+
+
+def _edited_dependencies(depends_on: tuple[int, ...], edit: TaskEdit) -> tuple[int, ...]:
+    """Return the dependencies after ``edit``: clear, remove, then add the missing ones in order."""
+    if not (edit.clear_depends_on or edit.remove_depends_on or edit.add_depends_on):
+        return depends_on
+    kept = () if edit.clear_depends_on else tuple(i for i in depends_on if i not in edit.remove_depends_on)
+    return kept + tuple(dict.fromkeys(i for i in edit.add_depends_on if i not in kept))
+
+
+def _field_value(task: Task, name: str) -> object:
+    """Return the value of one of ``EDIT_FIELDS``; the body is the Markdown."""
+    return task.markdown if name == "body" else getattr(task, name)
+
+
+def _describe_change(name: str, before: Task, after: Task) -> str:
+    """Return how one field changed, as written in the history and the commit message."""
+    if name == "body":
+        return "本文を変更"
+    return f"{_FIELD_LABELS[name]} {_field_text(getattr(before, name))} → {_field_text(getattr(after, name))}"
+
+
+def _field_text(value: object) -> str:
+    """Return a field's value as text: ``なし`` for none, IDs joined by ``, ``."""
+    if value is None or value == ():
+        return "なし"
+    if isinstance(value, tuple):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
+def _optional_one_line(label: str, value: str | None) -> str | None:
+    """Return None for None, else ``value`` checked as ``_one_line`` does."""
+    return None if value is None else _one_line(label, value)
+
+
 def _existing_task(data: Path, task_id: int) -> Task:
     """Read a task, or raise ``タスク <ID> がありません`` if its file does not exist."""
     if not task_path(data, task_id).is_file():
@@ -386,9 +656,9 @@ def _position(shown: list[int], task_id: int) -> int | None:
     return shown.index(task_id) + 1 if task_id in shown else None
 
 
-def _shown_ids(data: Path, queue: list[int]) -> list[int]:
-    """Return the IDs of the tasks of ``queue`` that are not ``done``."""
-    return [task.id for task in _shown_tasks(data, queue)]
+def _shown_ids(data: Path, queue: list[int], replacing: Task | None = None) -> list[int]:
+    """Return the IDs of the tasks of ``queue`` that are not ``done``, as ``_shown_tasks`` reads them."""
+    return [task.id for task in _shown_tasks(data, queue, replacing)]
 
 
 @dataclass(frozen=True)
@@ -435,7 +705,14 @@ def _one_line(label: str, value: str) -> str:
     return stripped
 
 
-def _shown_tasks(data: Path, queue: list[int]) -> list[Task]:
-    """Read the tasks of ``queue`` and keep those that are not ``done``."""
-    tasks = [read_task(data, task_id) for task_id in queue]
+def _shown_tasks(data: Path, queue: list[int], replacing: Task | None = None) -> list[Task]:
+    """Read the tasks of ``queue`` and keep those that are not ``done``.
+
+    ``replacing``, when given, is used in place of the file of the task with its ID
+    (a task about to be written).
+    """
+    tasks = [
+        replacing if replacing is not None and task_id == replacing.id else read_task(data, task_id)
+        for task_id in queue
+    ]
     return [task for task in tasks if task.status != "done"]

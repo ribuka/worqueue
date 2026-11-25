@@ -4,7 +4,7 @@ import argparse
 import io
 import sys
 
-from worqueue.cli import add, done, listing, log, move, show
+from worqueue.cli import add, done, edit, listing, log, move, show
 from worqueue.cli.output import print_error
 from worqueue.store.errors import WorqueueError
 
@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     show.register(subparsers)
     move.register(subparsers)
     log.register(subparsers)
+    edit.register(subparsers)
     done.register(subparsers)
     return parser
 
