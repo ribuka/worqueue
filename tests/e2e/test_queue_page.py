@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 from worqueue.store.ops import TaskEdit, edit_task
 from worqueue.store.queue import read_queue
@@ -75,3 +75,56 @@ def test_saving_a_task_changed_after_opening_it_shows_an_error(
     expect(page.locator("#error")).to_contain_text("変わりました")
     expect(page.locator("#edit-title")).to_have_value("CLI で変えた")
     assert (data / "tasks" / "1.md").read_bytes() == after
+
+
+def hold_task_reads(page: Page, task_id: int) -> list[Route]:
+    """Hold the page's reads of a task until the test continues them; return the held requests."""
+    held: list[Route] = []
+    page.route(f"**/api/tasks/{task_id}", lambda route: held.append(route))
+    return held
+
+
+def wait_held(page: Page, held: list[Route]) -> None:
+    """Wait until a read is held."""
+    for _ in range(100):
+        if held:
+            return
+        page.wait_for_timeout(50)
+    raise AssertionError("no read was held")
+
+
+def test_a_late_read_of_another_task_does_not_replace_the_open_one(page: Page, server: str) -> None:
+    """Opening task 2 while task 1 is still being read keeps task 2 and what was typed for it."""
+    page.goto(server)
+    add_on_page(page, "一つ目")
+    add_on_page(page, "二つ目")
+    held = hold_task_reads(page, 1)
+    row(page, 1).click()
+    wait_held(page, held)
+
+    row(page, 2).click()
+    expect(page.locator("#detail-title")).to_have_text("2 二つ目")
+    page.fill("#edit-title", "入力中")
+    held[0].continue_()
+    page.wait_for_load_state("networkidle")
+
+    expect(page.locator("#detail-title")).to_have_text("2 二つ目")
+    expect(page.locator("#edit-title")).to_have_value("入力中")
+
+
+def test_a_late_read_does_not_reopen_a_closed_panel(page: Page, server: str) -> None:
+    """Closing the panel while a task is being read keeps it closed."""
+    page.goto(server)
+    add_on_page(page, "一つ目")
+    add_on_page(page, "二つ目")
+    row(page, 2).click()
+    expect(page.locator("#detail")).to_be_visible()
+    held = hold_task_reads(page, 1)
+    row(page, 1).click()
+    wait_held(page, held)
+
+    page.click("#detail-close")
+    held[0].continue_()
+    page.wait_for_load_state("networkidle")
+
+    expect(page.locator("#detail")).to_be_hidden()

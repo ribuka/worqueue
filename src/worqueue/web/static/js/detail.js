@@ -33,10 +33,15 @@ export function createDetail(run) {
   const panel = document.getElementById("detail");
   const field = (id) => document.getElementById(id);
   let current = null; // {id, version, initial}
+  // Counts opens and closes: a response read for an earlier one is dropped.
+  let generation = 0;
 
-  // Shows the task in the panel, keeping nothing typed before.
+  // Shows the task in the panel, keeping nothing typed before; does nothing if
+  // another task was opened, or the panel closed, while it was being read.
   async function open(id) {
+    const mine = ++generation;
     const { task, body, version } = await getTask(id);
+    if (mine !== generation) return;
     if (task.status === "done") {
       close();
       return;
@@ -68,6 +73,7 @@ export function createDetail(run) {
 
   // Hides the panel.
   function close() {
+    generation++;
     current = null;
     panel.hidden = true;
   }

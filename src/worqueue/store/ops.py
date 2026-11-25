@@ -423,6 +423,11 @@ class TaskEdit:
         IDs to take out of the dependencies. Not with ``clear_depends_on``.
     clear_depends_on : bool
         Start the dependencies from none (then ``add_depends_on`` replaces them).
+    depends_on : tuple of int or None
+        The whole new list of dependencies, resolved against the file read under the
+        lock: IDs not in it are removed, and IDs not yet there are added (and
+        checked) in order. Not with ``add_depends_on``, ``remove_depends_on``, or
+        ``clear_depends_on``.
     body : str or None
         New body, replacing the Markdown before the history. Surrounding whitespace
         is removed; empty for none.
@@ -437,6 +442,7 @@ class TaskEdit:
     add_depends_on: tuple[int, ...] = ()
     remove_depends_on: tuple[int, ...] = ()
     clear_depends_on: bool = False
+    depends_on: tuple[int, ...] | None = None
     body: str | None = None
 
 
@@ -524,8 +530,8 @@ def edit_task(
         unusable, the lock is not acquired, or the commit fails.
         ``StaleError`` (a subclass) if a file of ``expected`` changed.
     ValueError
-        If ``edit`` sets both ``due`` and ``clear_due``, or both
-        ``remove_depends_on`` and ``clear_depends_on``.
+        If ``edit`` sets both ``due`` and ``clear_due``, both ``remove_depends_on``
+        and ``clear_depends_on``, or ``depends_on`` with another dependency option.
     """
     edit = replace(
         edit,
@@ -538,8 +544,9 @@ def edit_task(
 
     def prepare() -> tuple[EditResult, _Change | None]:
         task = _existing_task(data, task_id)
-        _check_new_dependencies(data, task_id, edit.add_depends_on)
-        edited = _edited(task, edit)
+        resolved = _resolved_dependencies(edit, task.depends_on)
+        _check_new_dependencies(data, task_id, resolved.add_depends_on)
+        edited = _edited(task, resolved)
         changed = tuple(name for name in EDIT_FIELDS if _field_value(task, name) != _field_value(edited, name))
         queue = read_queue(data)
         if not changed:
@@ -583,6 +590,8 @@ def _check_edit_options(edit: TaskEdit) -> None:
         raise ValueError("TaskEdit cannot set both due and clear_due")
     if edit.remove_depends_on and edit.clear_depends_on:
         raise ValueError("TaskEdit cannot set both remove_depends_on and clear_depends_on")
+    if edit.depends_on is not None and (edit.add_depends_on or edit.remove_depends_on or edit.clear_depends_on):
+        raise ValueError("TaskEdit cannot set depends_on with another dependency option")
     if edit.status is not None and edit.status not in OPEN_STATUSES:
         raise WorqueueError(f"状態は {', '.join(OPEN_STATUSES)} のどれかにしてください: {edit.status}")
     if edit.kind is not None and edit.kind not in KINDS:
@@ -635,6 +644,18 @@ def _edited(task: Task, edit: TaskEdit) -> Task:
         due=None if edit.clear_due else task.due if edit.due is None else edit.due,
         depends_on=_edited_dependencies(task.depends_on, edit),
         markdown=markdown,
+    )
+
+
+def _resolved_dependencies(edit: TaskEdit, current: tuple[int, ...]) -> TaskEdit:
+    """Return ``edit`` with ``depends_on`` turned into the IDs to remove from and add to ``current``."""
+    if edit.depends_on is None:
+        return edit
+    return replace(
+        edit,
+        depends_on=None,
+        add_depends_on=tuple(i for i in edit.depends_on if i not in current),
+        remove_depends_on=tuple(i for i in current if i not in edit.depends_on),
     )
 
 

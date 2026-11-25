@@ -219,6 +219,26 @@ def test_editing_a_file_changed_after_reading_is_409(client: TestClient, data: P
     assert commit_count(git, data) == 2
 
 
+@pytest.mark.parametrize(
+    "change",
+    [lambda path: path.unlink(), lambda path: path.write_text("壊れたファイル", encoding="utf-8")],
+    ids=["deleted", "broken"],
+)
+def test_editing_a_file_deleted_or_broken_after_reading_is_409(
+    client: TestClient, data: Path, change: Callable[[Path], None]
+) -> None:
+    """The version is checked before the file is read, so a deleted or broken file is 409, not 400."""
+    add(client, "a")
+    add(client, "b")
+    version = version_of(client, 2)
+    change(data / "tasks" / "2.md")
+
+    response = client.patch("/api/tasks/2", json={"version": version, "depends_on": [1]})
+
+    assert response.status_code == 409
+    assert response.json()["error"].startswith("tasks/2.md は画面を読み込んだ後に変わりました")
+
+
 @pytest.mark.parametrize(("path", "body"), [("log", {"content": "内容"}), ("done", {})])
 def test_log_and_done_refuse_a_stale_version(
     client: TestClient, data: Path, now: datetime, path: str, body: dict

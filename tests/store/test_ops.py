@@ -357,8 +357,18 @@ def test_move_task_to_the_same_position_writes_and_commits_nothing(data: Path, n
         (TaskEdit(clear_depends_on=True), ()),
         (TaskEdit(clear_depends_on=True, add_depends_on=(4, 2)), (4, 2)),
         (TaskEdit(remove_depends_on=(2,), add_depends_on=(4,)), (3, 4)),
+        (TaskEdit(depends_on=(4, 3)), (3, 4)),
+        (TaskEdit(depends_on=()), ()),
     ],
-    ids=["add-keeps-order-and-skips-present", "remove-ignores-absent", "clear", "clear-and-add-replaces", "remove-then-add"],
+    ids=[
+        "add-keeps-order-and-skips-present",
+        "remove-ignores-absent",
+        "clear",
+        "clear-and-add-replaces",
+        "remove-then-add",
+        "whole-list-keeps-then-adds",
+        "whole-list-empty",
+    ],
 )
 def test_edit_task_changes_the_dependencies_in_order(
     data: Path, now: datetime, edit: TaskEdit, depends_on: tuple[int, ...]
@@ -387,6 +397,19 @@ def test_edit_task_follows_dependencies_past_a_missing_file(data: Path, now: dat
     result = edit_task(data, 3, TaskEdit(add_depends_on=(2,), remove_depends_on=(1,)), None, now)
 
     assert result.task.depends_on == (2,)
+
+
+def test_edit_task_checks_only_the_new_ids_of_a_whole_dependency_list(data: Path, now: datetime) -> None:
+    """With ``depends_on``, a kept dependency without a file stays, and a new missing one is refused."""
+    add(data, now)
+    add(data, now)
+    add(data, now, depends_on=(1,))
+    (data / "tasks" / "1.md").unlink()
+    write_queue(data, [2, 3])
+
+    assert edit_task(data, 3, TaskEdit(depends_on=(1, 2)), None, now).task.depends_on == (1, 2)
+    with pytest.raises(WorqueueError, match="タスク 9 がありません"):
+        edit_task(data, 3, TaskEdit(depends_on=(1, 2, 9)), None, now)
 
 
 def test_edit_task_keeps_a_done_task_out_of_the_queue_unless_reopened(data: Path, now: datetime, git: Git) -> None:
@@ -421,8 +444,13 @@ def test_edit_task_reopens_a_done_task_left_in_the_queue_where_it_is(data: Path,
 
 @pytest.mark.parametrize(
     "edit",
-    [TaskEdit(due=date(2026, 12, 1), clear_due=True), TaskEdit(remove_depends_on=(1,), clear_depends_on=True)],
-    ids=["due", "depends_on"],
+    [
+        TaskEdit(due=date(2026, 12, 1), clear_due=True),
+        TaskEdit(remove_depends_on=(1,), clear_depends_on=True),
+        TaskEdit(depends_on=(1,), add_depends_on=(2,)),
+        TaskEdit(depends_on=(), clear_depends_on=True),
+    ],
+    ids=["due", "depends_on", "whole-list-and-add", "whole-list-and-clear"],
 )
 def test_edit_task_rejects_contradicting_options(data: Path, now: datetime, edit: TaskEdit) -> None:
     """``edit_task`` rejects setting and clearing the same field as a caller's error."""

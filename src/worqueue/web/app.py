@@ -98,9 +98,8 @@ def _add_write_routes(app: FastAPI, data: Path, now: Callable[[], datetime]) -> 
 
     @app.patch("/api/tasks/{task_id}")
     def edit(task_id: int, body: EditBody) -> dict:
-        current, _ = show_task(data, task_id)
-        edit = body.to_edit(current.depends_on)
-        result = edit_task(data, task_id, edit, body.reason, now(), expected=task_file(task_id, body.version))
+        expected = task_file(task_id, body.version)
+        result = edit_task(data, task_id, body.to_edit(), body.reason, now(), expected=expected)
         return {"task": result.task.summary(result.position), "changed": list(result.changed)}
 
     @app.post("/api/tasks/{task_id}/log")

@@ -1,6 +1,5 @@
 """Bodies of the Web UI's write requests, and how they become the data layer's inputs."""
 
-from dataclasses import replace
 from datetime import date
 from typing import Self
 
@@ -72,38 +71,25 @@ class EditBody(_Body):
             raise ValueError(f"null にできない項目です: {', '.join(nulls)}")
         return self
 
-    def to_edit(self, current_depends_on: tuple[int, ...]) -> TaskEdit:
+    def to_edit(self) -> TaskEdit:
         """Return the edit for ``edit_task``.
-
-        Parameters
-        ----------
-        current_depends_on : tuple of int
-            The task's dependencies now, to turn the new list into IDs to add and remove.
 
         Returns
         -------
         TaskEdit
-            The fields given, with ``due: null`` as ``clear_due`` and ``depends_on`` as
-            the IDs to add (in the given order) and remove, or ``clear_depends_on`` for
-            an empty list.
+            The fields given, with ``due: null`` as ``clear_due``. ``depends_on`` is
+            passed whole: ``edit_task`` resolves it against the file it reads under
+            the lock, after checking the version.
         """
-        edit = TaskEdit(
+        return TaskEdit(
             title=self.title,
             status=self.status,
             kind=self.kind,
             assignee=self.assignee,
             due=self.due,
             clear_due="due" in self.model_fields_set and self.due is None,
+            depends_on=None if self.depends_on is None else tuple(self.depends_on),
             body=self.body,
-        )
-        if self.depends_on is None:
-            return edit
-        if not self.depends_on:
-            return replace(edit, clear_depends_on=True)
-        return replace(
-            edit,
-            add_depends_on=tuple(i for i in self.depends_on if i not in current_depends_on),
-            remove_depends_on=tuple(i for i in current_depends_on if i not in self.depends_on),
         )
 
 
