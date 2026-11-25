@@ -7,7 +7,7 @@ from worqueue.cli.args import parse_date
 from worqueue.cli.output import add_json_option, print_json
 from worqueue.store.ops import NewTask, add_task
 from worqueue.store.paths import data_dir
-from worqueue.store.task import KINDS, OPEN_STATUSES
+from worqueue.store.task import KINDS, MY_ASSIGNEE, OPEN_STATUSES
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -21,7 +21,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("add", help="タスクを作り、キューの末尾に入れる", description="タスクを作り、キューの末尾に入れる")
     parser.add_argument("title", metavar="<タイトル>", help="1 行のタイトル")
     parser.add_argument("--kind", required=True, choices=KINDS, help="manage（管理）か implement（実装）")
-    parser.add_argument("--assignee", default="me", metavar="<名前>", help="担当。既定は me（自分）")
+    parser.add_argument("--assignee", default=MY_ASSIGNEE, metavar="<名前>", help="担当。既定は me（自分）")
     parser.add_argument("--due", type=parse_date, metavar="<YYYY-MM-DD>", help="期限")
     parser.add_argument(
         "--depends-on", type=int, action="append", default=[], metavar="<ID>", help="依存先のタスクの ID（繰り返し可）"

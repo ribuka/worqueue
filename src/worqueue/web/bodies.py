@@ -6,6 +6,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from worqueue.store.ops import NewTask, TaskEdit
+from worqueue.store.task import MY_ASSIGNEE
 
 _NOT_NULL_EDIT_FIELDS = ("title", "status", "kind", "assignee", "depends_on", "body", "reason")
 
@@ -21,7 +22,7 @@ class NewTaskBody(_Body):
 
     title: str
     kind: str
-    assignee: str = "me"
+    assignee: str = MY_ASSIGNEE
     due: date | None = None
     depends_on: list[int] = []
     status: str = "todo"
