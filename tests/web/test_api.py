@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from worqueue.store.ops import TaskEdit, edit_task
+from worqueue.store.ops import NewTask, TaskEdit, add_task, done_task, edit_task
 from worqueue.store.queue import read_queue, write_queue
 from worqueue.store.task import read_task
 from worqueue.store.versions import file_version
@@ -42,8 +42,40 @@ def test_the_page_and_its_files_are_served(client: TestClient) -> None:
 
 def test_the_queue_of_a_new_data_is_empty(client: TestClient, data: Path) -> None:
     """Without data/, the queue is empty with the version of a missing ``queue.md``, and nothing is created."""
-    assert client.get("/api/queue").json() == {"tasks": [], "version": "none"}
+    assert client.get("/api/queue").json() == {"tasks": [], "version": "none", "task_versions": {}}
     assert not data.exists()
+
+
+def test_the_queue_has_the_version_of_each_task_file(client: TestClient, data: Path) -> None:
+    """``GET /api/queue`` answers the version of each task's file, keyed by the ID as a string."""
+    add(client, "a")
+    add(client, "b")
+
+    versions = client.get("/api/queue").json()["task_versions"]
+
+    assert versions == {"1": file_version(data / "tasks" / "1.md"), "2": file_version(data / "tasks" / "2.md")}
+
+
+def test_the_done_tasks_of_a_new_data_are_none(client: TestClient, data: Path) -> None:
+    """Without data/, there are no done tasks, and nothing is created."""
+    assert client.get("/api/done").json() == {"tasks": [], "total": 0, "task_versions": {}}
+    assert not data.exists()
+
+
+def test_the_done_tasks_are_the_20_largest_ids_with_the_total(client: TestClient, data: Path, now: datetime) -> None:
+    """``GET /api/done`` answers 20 done tasks, the largest ID first, with their total and versions."""
+    for number in range(1, 23):
+        add_task(data, NewTask(title=f"タスク {number}", kind="implement"), now)
+    for task_id in range(2, 23):
+        done_task(data, task_id, None, now)
+
+    response = client.get("/api/done").json()
+
+    ids = [task["id"] for task in response["tasks"]]
+    assert ids == list(range(22, 2, -1))
+    assert all(task["position"] is None and task["status"] == "done" for task in response["tasks"])
+    assert response["total"] == 21
+    assert response["task_versions"] == {str(i): file_version(data / "tasks" / f"{i}.md") for i in ids}
 
 
 def test_adding_a_task_commits_it_and_shows_it_in_the_queue(client: TestClient, data: Path, git: Git) -> None:

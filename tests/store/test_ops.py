@@ -18,6 +18,7 @@ from worqueue.store.ops import (
     add_task,
     done_task,
     edit_task,
+    list_done,
     list_queue,
     log_task,
     move_task,
@@ -258,6 +259,25 @@ def test_list_queue_reports_a_queued_task_without_a_file(data: Path, now: dateti
 def mark_done_by_hand(data: Path, task_id: int) -> None:
     """Set a task's status to ``done`` in its file, leaving it in ``queue.md``."""
     write_task(data, replace(read_task(data, task_id), status="done"))
+
+
+def test_list_done_reads_without_creating_data(data: Path) -> None:
+    """``list_done`` reads without creating data."""
+    assert list_done(data) == []
+    assert not data.exists()
+
+
+def test_list_done_returns_the_done_tasks_the_largest_id_first(data: Path, now: datetime) -> None:
+    """``list_done`` returns done tasks in or out of the queue, the largest ID first, and no others."""
+    for title in ["一", "二", "三", "四", "五"]:
+        add(data, now, title)
+    done_task(data, 1, None, now)
+    done_task(data, 4, None, now)
+    mark_done_by_hand(data, 2)
+    write_queue(data, [2, 3])  # 5 is left out of the queue without being done
+
+    assert [task.id for task in list_done(data)] == [4, 2, 1]
+    assert read_queue(data) == [2, 3]
 
 
 @pytest.mark.parametrize(

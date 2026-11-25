@@ -165,3 +165,95 @@ button {
   overflow: auto;
   font-family: inherit;
 }
+
+[hidden] {
+  display: none !important;
+}
+
+.views {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 0;
+}
+
+.views button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.board {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  min-height: 240px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.column.drop-target {
+  border-color: var(--accent);
+}
+
+.column h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.column-count {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.card {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: grab;
+}
+
+.card:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.column[data-status="done"] .card {
+  opacity: 0.7;
+}
+
+.card.drop-before {
+  box-shadow: 0 -3px 0 var(--accent);
+}
+
+.card.drop-after {
+  box-shadow: 0 3px 0 var(--accent);
+}
+
+.card-head,
+.card-meta {
+  font-size: 12px;
+  white-space: pre;
+}
+
+.card-title {
+  margin: 2px 0;
+}
+
+.more {
+  margin: 8px 0 0;
+  font-size: 12px;
+}

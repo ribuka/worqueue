@@ -24,8 +24,11 @@ async function request(method, path, body) {
   return data;
 }
 
-// Returns {tasks, version}: the queue from the top and the version of queue.md.
+// Returns {tasks, version, task_versions}: the queue from the top, the version of queue.md, and of each task file.
 export const getQueue = () => request("GET", "/api/queue");
+
+// Returns {tasks, total, task_versions}: up to 20 done tasks (the largest ID first), how many are done, and versions.
+export const getDone = () => request("GET", "/api/done");
 
 // Returns {task, body, version}: one task with its Markdown, its body, and its file's version.
 export const getTask = (id) => request("GET", `/api/tasks/${id}`);
