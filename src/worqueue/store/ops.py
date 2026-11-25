@@ -14,6 +14,7 @@ from worqueue.store.repo import check_git, commit, ensure_repo
 from worqueue.store.task import (
     HISTORY_HEADING,
     KINDS,
+    MY_ASSIGNEE,
     OPEN_STATUSES,
     Task,
     append_history,
@@ -53,7 +54,7 @@ class NewTask:
 
     title: str
     kind: str
-    assignee: str = "me"
+    assignee: str = MY_ASSIGNEE
     due: date | None = None
     depends_on: tuple[int, ...] = ()
     status: str = "todo"

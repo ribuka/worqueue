@@ -13,6 +13,8 @@ TASKS_DIR = "tasks"
 STATUSES = ("todo", "doing", "waiting", "done")
 OPEN_STATUSES = ("todo", "doing", "waiting")
 KINDS = ("manage", "implement")
+# The assignee of a task that is my own, not handed to a member.
+MY_ASSIGNEE = "me"
 HISTORY_HEADING = "## 履歴"
 FIELD_NAMES = ("title", "status", "kind", "assignee", "due", "depends_on", "created")
 FRONT_MATTER_FENCE = "---"
